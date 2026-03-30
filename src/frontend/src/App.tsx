@@ -555,6 +555,43 @@ const makeInitialState = (
   isAutoShoot: isMobileDevice(),
 });
 
+// --- UI State (React-only: only the fields the JSX actually reads) ---
+interface UiState {
+  score: number;
+  health: number;
+  armySize: number;
+  weaponLevel: number;
+  bulletDamage: number;
+  activeSpecial: string;
+  specialTimer: number;
+  isGameOver: boolean;
+  isVictory: boolean;
+  isLevelTransition: boolean;
+  isStarted: boolean;
+  level: number;
+  levelTimer: number;
+  shootMode: "AIM" | "STRAIGHT";
+  isAutoShoot: boolean;
+}
+
+const extractUiState = (gs: GameState): UiState => ({
+  score: gs.score,
+  health: gs.health,
+  armySize: gs.armySize,
+  weaponLevel: gs.weaponLevel,
+  bulletDamage: gs.bulletDamage,
+  activeSpecial: gs.activeSpecial,
+  specialTimer: gs.specialTimer,
+  isGameOver: gs.isGameOver,
+  isVictory: gs.isVictory,
+  isLevelTransition: gs.isLevelTransition,
+  isStarted: gs.isStarted,
+  level: gs.level,
+  levelTimer: gs.levelTimer,
+  shootMode: gs.shootMode,
+  isAutoShoot: gs.isAutoShoot,
+});
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -565,8 +602,8 @@ export default function App() {
   );
   const [isPaused, setIsPaused] = useState(false);
 
-  const [gameState, setGameState] = useState<GameState>(
-    makeInitialState(false),
+  const [uiState, setUiState] = useState<UiState>(() =>
+    extractUiState(makeInitialState(false)),
   );
 
   // Leaderboard state
@@ -579,18 +616,23 @@ export default function App() {
   const requestRef = useRef<number>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bgDirtyRef = useRef(true);
-  const gameStateRef = useRef<GameState>(gameState);
-  const uiSnapshotRef = useRef({
+  const gameStateRef = useRef<GameState>(makeInitialState(false));
+  const uiSnapshotRef = useRef<UiState>({
     score: 0,
     health: 100,
     armySize: 1,
     weaponLevel: 0,
     bulletDamage: 1.0,
-    activeSpecial: "NONE" as string,
+    activeSpecial: "NONE",
+    specialTimer: 0,
     isGameOver: false,
     isVictory: false,
     isLevelTransition: false,
     isStarted: false,
+    level: 1,
+    levelTimer: 60 * 60,
+    shootMode: "AIM",
+    isAutoShoot: false,
   });
   const isLandscapeRef = useRef(isLandscape);
   const isPausedRef = useRef(isPaused);
@@ -612,10 +654,6 @@ export default function App() {
   const mouseMovedRef = useRef(false);
   const mouseButtonDownRef = useRef(false);
   const TOUCH_DEAD_ZONE = 6;
-
-  useEffect(() => {
-    gameStateRef.current = gameState;
-  }, [gameState]);
 
   useEffect(() => {
     isLandscapeRef.current = isLandscape;
@@ -702,35 +740,36 @@ export default function App() {
     setPlayerName("");
     setIsPaused(false);
     bgDirtyRef.current = true;
-    setGameState(makeInitialState(true, isLandscapeRef.current));
+    const newGs = makeInitialState(true, isLandscapeRef.current);
+    gameStateRef.current = newGs;
+    setUiState(extractUiState(newGs));
   };
 
   const startNextLevel = () => {
     bgDirtyRef.current = true;
-    setGameState((prev) => ({
-      ...prev,
-      level: prev.level + 1,
-      levelTimer: 60 * 60,
-      isLevelTransition: false,
-      zombies: [],
-      zombieBullets: [],
-      gates: [],
-      bullets: [],
-      explosions: [],
-      floatingTexts: [],
-      dyingSoldiers: [],
-      spawnFlashes: [],
-      mudPonds: generateMudPonds(
-        isLandscapeRef.current ? LAND_W : CANVAS_WIDTH,
-        isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT,
-        prev.level + 1,
-      ),
-      herbPatches: generateHerbPatches(
-        isLandscapeRef.current ? LAND_W : CANVAS_WIDTH,
-        isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT,
-      ),
-      hitFlashTimer: 0,
-    }));
+    const gs = gameStateRef.current;
+    gs.level = gs.level + 1;
+    gs.levelTimer = 60 * 60;
+    gs.isLevelTransition = false;
+    gs.zombies = [];
+    gs.zombieBullets = [];
+    gs.gates = [];
+    gs.bullets = [];
+    gs.explosions = [];
+    gs.floatingTexts = [];
+    gs.dyingSoldiers = [];
+    gs.spawnFlashes = [];
+    gs.hitFlashTimer = 0;
+    gs.mudPonds = generateMudPonds(
+      isLandscapeRef.current ? LAND_W : CANVAS_WIDTH,
+      isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT,
+      gs.level,
+    );
+    gs.herbPatches = generateHerbPatches(
+      isLandscapeRef.current ? LAND_W : CANVAS_WIDTH,
+      isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT,
+    );
+    setUiState(extractUiState(gs));
   };
 
   const handleToggleLandscape = () => {
@@ -927,7 +966,28 @@ export default function App() {
     }
 
     if (newState.isLevelTransition) {
-      setGameState(newState);
+      const snapTr = uiSnapshotRef.current;
+      const uiTr = extractUiState(newState);
+      if (
+        snapTr.score !== uiTr.score ||
+        snapTr.health !== uiTr.health ||
+        snapTr.armySize !== uiTr.armySize ||
+        snapTr.weaponLevel !== uiTr.weaponLevel ||
+        snapTr.bulletDamage !== uiTr.bulletDamage ||
+        snapTr.activeSpecial !== uiTr.activeSpecial ||
+        snapTr.specialTimer !== uiTr.specialTimer ||
+        snapTr.isGameOver !== uiTr.isGameOver ||
+        snapTr.isVictory !== uiTr.isVictory ||
+        snapTr.isLevelTransition !== uiTr.isLevelTransition ||
+        snapTr.isStarted !== uiTr.isStarted ||
+        snapTr.level !== uiTr.level ||
+        snapTr.shootMode !== uiTr.shootMode ||
+        snapTr.isAutoShoot !== uiTr.isAutoShoot
+      ) {
+        uiSnapshotRef.current = uiTr;
+        setUiState(uiTr);
+      }
+      renderFrame();
       requestRef.current = requestAnimationFrame(update);
       return;
     }
@@ -1800,31 +1860,26 @@ export default function App() {
 
     // Only re-render React when UI-visible fields actually change
     const snap = uiSnapshotRef.current;
+    const uiSnap = extractUiState(newState);
     if (
-      snap.score !== newState.score ||
-      snap.health !== newState.health ||
-      snap.armySize !== newState.armySize ||
-      snap.weaponLevel !== newState.weaponLevel ||
-      snap.bulletDamage !== newState.bulletDamage ||
-      snap.activeSpecial !== newState.activeSpecial ||
-      snap.isGameOver !== newState.isGameOver ||
-      snap.isVictory !== newState.isVictory ||
-      snap.isLevelTransition !== newState.isLevelTransition ||
-      snap.isStarted !== newState.isStarted
+      snap.score !== uiSnap.score ||
+      snap.health !== uiSnap.health ||
+      snap.armySize !== uiSnap.armySize ||
+      snap.weaponLevel !== uiSnap.weaponLevel ||
+      snap.bulletDamage !== uiSnap.bulletDamage ||
+      snap.activeSpecial !== uiSnap.activeSpecial ||
+      snap.specialTimer !== uiSnap.specialTimer ||
+      snap.isGameOver !== uiSnap.isGameOver ||
+      snap.isVictory !== uiSnap.isVictory ||
+      snap.isLevelTransition !== uiSnap.isLevelTransition ||
+      snap.isStarted !== uiSnap.isStarted ||
+      snap.level !== uiSnap.level ||
+      snap.levelTimer !== uiSnap.levelTimer ||
+      snap.shootMode !== uiSnap.shootMode ||
+      snap.isAutoShoot !== uiSnap.isAutoShoot
     ) {
-      uiSnapshotRef.current = {
-        score: newState.score,
-        health: newState.health,
-        armySize: newState.armySize,
-        weaponLevel: newState.weaponLevel,
-        bulletDamage: newState.bulletDamage,
-        activeSpecial: newState.activeSpecial,
-        isGameOver: newState.isGameOver,
-        isVictory: newState.isVictory,
-        isLevelTransition: newState.isLevelTransition,
-        isStarted: newState.isStarted,
-      };
-      setGameState({ ...newState });
+      uiSnapshotRef.current = uiSnap;
+      setUiState(uiSnap);
     }
     renderFrame();
     requestRef.current = requestAnimationFrame(update);
@@ -1832,13 +1887,13 @@ export default function App() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: game loop ref pattern
   useEffect(() => {
-    if (gameState.isStarted && !gameState.isGameOver) {
+    if (uiState.isStarted && !uiState.isGameOver) {
       requestRef.current = requestAnimationFrame(update);
     }
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [gameState.isStarted, gameState.isGameOver]);
+  }, [uiState.isStarted, uiState.isGameOver]);
 
   // --- Rendering ---
   const renderFrame = () => {
@@ -2369,15 +2424,15 @@ export default function App() {
         <div className="flex flex-col">
           <div className="flex items-center gap-2">
             <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-              Level {gameState.level}
+              Level {uiState.level}
             </span>
             <span className="text-[10px] text-zinc-600 font-mono">|</span>
             <span className="text-[10px] text-zinc-400 font-mono">
-              {Math.floor(gameState.levelTimer / 60)}s
+              {Math.floor(uiState.levelTimer / 60)}s
             </span>
           </div>
           <span className="text-2xl font-bold font-mono">
-            {gameState.score.toLocaleString()}
+            {uiState.score.toLocaleString()}
           </span>
         </div>
         <div className="flex gap-3 items-end">
@@ -2388,9 +2443,9 @@ export default function App() {
             <div className="flex items-center gap-1">
               <User size={14} className="text-blue-400" />
               <span className="text-lg font-bold font-mono">
-                {Math.floor(gameState.armySize) >= MAX_ARMY_SIZE
+                {Math.floor(uiState.armySize) >= MAX_ARMY_SIZE
                   ? "MAX"
-                  : Math.floor(gameState.armySize)}
+                  : Math.floor(uiState.armySize)}
               </span>
             </div>
           </div>
@@ -2402,20 +2457,20 @@ export default function App() {
               <Zap
                 size={14}
                 className={`text-yellow-400 ${
-                  gameState.specialTimer > 0 ? "animate-pulse" : ""
+                  uiState.specialTimer > 0 ? "animate-pulse" : ""
                 }`}
               />
               <span className="text-lg font-bold font-mono">
-                Lv.{gameState.weaponLevel}
-                {gameState.specialTimer > 0 && (
+                Lv.{uiState.weaponLevel}
+                {uiState.specialTimer > 0 && (
                   <span
                     className={`${
-                      gameState.activeSpecial === "CURVED"
+                      uiState.activeSpecial === "CURVED"
                         ? "text-pink-500"
                         : "text-orange-500"
                     } ml-1 text-sm`}
                   >
-                    ({gameState.activeSpecial})
+                    ({uiState.activeSpecial})
                   </span>
                 )}
               </span>
@@ -2465,57 +2520,63 @@ export default function App() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() =>
-                  setGameState((prev) => ({
+                onClick={() => {
+                  gameStateRef.current.shootMode =
+                    gameStateRef.current.shootMode === "AIM"
+                      ? "STRAIGHT"
+                      : "AIM";
+                  setUiState((prev) => ({
                     ...prev,
-                    shootMode: prev.shootMode === "AIM" ? "STRAIGHT" : "AIM",
-                  }))
-                }
+                    shootMode: gameStateRef.current.shootMode,
+                  }));
+                }}
                 title={
-                  gameState.shootMode === "AIM"
+                  uiState.shootMode === "AIM"
                     ? "Switch to Straight Fire"
                     : "Switch to Aimed Fire"
                 }
                 className={`flex items-center gap-1 px-2 py-0.5 rounded border ${
-                  gameState.shootMode === "STRAIGHT"
+                  uiState.shootMode === "STRAIGHT"
                     ? "bg-blue-900/40 border-blue-500 text-blue-200"
                     : "bg-zinc-800 border-zinc-700 text-zinc-300"
                 } transition-all active:scale-95`}
               >
-                {gameState.shootMode === "STRAIGHT" ? (
+                {uiState.shootMode === "STRAIGHT" ? (
                   <ArrowUp size={12} />
                 ) : (
                   <Target size={12} />
                 )}
                 <span className="text-[10px] font-bold uppercase tracking-wider">
-                  {gameState.shootMode}
+                  {uiState.shootMode}
                 </span>
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setGameState((prev) => ({
+                onClick={() => {
+                  gameStateRef.current.isAutoShoot =
+                    !gameStateRef.current.isAutoShoot;
+                  setUiState((prev) => ({
                     ...prev,
-                    isAutoShoot: !prev.isAutoShoot,
-                  }))
-                }
+                    isAutoShoot: gameStateRef.current.isAutoShoot,
+                  }));
+                }}
                 title={
-                  gameState.isAutoShoot
+                  uiState.isAutoShoot
                     ? "Disable Auto-Shoot"
                     : "Enable Auto-Shoot"
                 }
                 className={`flex items-center gap-1 px-2 py-0.5 rounded border ${
-                  gameState.isAutoShoot
+                  uiState.isAutoShoot
                     ? "bg-orange-900/40 border-orange-500 text-orange-200"
                     : "bg-zinc-800 border-zinc-700 text-zinc-300"
                 } transition-all active:scale-95`}
               >
                 <Zap
                   size={12}
-                  className={gameState.isAutoShoot ? "fill-current" : ""}
+                  className={uiState.isAutoShoot ? "fill-current" : ""}
                 />
                 <span className="text-[10px] font-bold uppercase tracking-wider">
-                  {gameState.isAutoShoot ? "AUTO" : "MANUAL"}
+                  {uiState.isAutoShoot ? "AUTO" : "MANUAL"}
                 </span>
               </button>
             </div>
@@ -2552,31 +2613,31 @@ export default function App() {
             <motion.div
               className="h-full bg-red-500"
               initial={{ width: "100%" }}
-              animate={{ width: `${gameState.health}%` }}
+              animate={{ width: `${uiState.health}%` }}
             />
           </div>
-          {gameState.specialTimer > 0 && (
+          {uiState.specialTimer > 0 && (
             <div className="w-full bg-zinc-900/80 h-1.5 rounded-full overflow-hidden border border-zinc-700">
               <motion.div
                 className={`h-full ${
-                  gameState.activeSpecial === "CURVED"
+                  uiState.activeSpecial === "CURVED"
                     ? "bg-pink-500"
                     : "bg-orange-500"
                 }`}
                 initial={{ width: "100%" }}
                 animate={{
-                  width: `${(gameState.specialTimer / (20 * 60)) * 100}%`,
+                  width: `${(uiState.specialTimer / (20 * 60)) * 100}%`,
                 }}
               />
             </div>
           )}
           <div className="flex justify-between items-start text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-            <span>Health: {Math.ceil(gameState.health)}%</span>
+            <span>Health: {Math.ceil(uiState.health)}%</span>
             <div className="flex flex-col items-end">
-              <span>Damage: x{gameState.bulletDamage.toFixed(1)}</span>
+              <span>Damage: x{uiState.bulletDamage.toFixed(1)}</span>
               <span>
                 Fire Rate: x
-                {(23 / Math.max(3, 25 - gameState.weaponLevel * 2)).toFixed(1)}
+                {(23 / Math.max(3, 25 - uiState.weaponLevel * 2)).toFixed(1)}
               </span>
             </div>
           </div>
@@ -2584,7 +2645,7 @@ export default function App() {
 
         {/* Overlays */}
         <AnimatePresence>
-          {!gameState.isStarted && (
+          {!uiState.isStarted && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -2610,7 +2671,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {gameState.isGameOver && (
+          {uiState.isGameOver && (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -2625,7 +2686,7 @@ export default function App() {
                   Final Score
                 </span>
                 <span className="text-4xl font-mono font-bold">
-                  {gameState.score.toLocaleString()}
+                  {uiState.score.toLocaleString()}
                 </span>
               </div>
               {!scoreSubmitted ? (
@@ -2648,7 +2709,7 @@ export default function App() {
                       if (!playerName.trim()) return;
                       await submitScoreMutation.mutateAsync({
                         name: playerName.trim(),
-                        score: gameState.score,
+                        score: uiState.score,
                       });
                       setScoreSubmitted(true);
                     }}
@@ -2685,7 +2746,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {gameState.isVictory && (
+          {uiState.isVictory && (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -2703,7 +2764,7 @@ export default function App() {
                   Total Score
                 </span>
                 <span className="text-4xl font-mono font-bold">
-                  {gameState.score.toLocaleString()}
+                  {uiState.score.toLocaleString()}
                 </span>
               </div>
               {!scoreSubmitted ? (
@@ -2726,7 +2787,7 @@ export default function App() {
                       if (!playerName.trim()) return;
                       await submitScoreMutation.mutateAsync({
                         name: playerName.trim(),
-                        score: gameState.score,
+                        score: uiState.score,
                       });
                       setScoreSubmitted(true);
                     }}
@@ -2763,7 +2824,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {gameState.isLevelTransition && (
+          {uiState.isLevelTransition && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -2774,7 +2835,7 @@ export default function App() {
                   Level Complete
                 </h3>
                 <h2 className="text-6xl font-black italic uppercase tracking-tighter mb-6">
-                  Level {gameState.level}
+                  Level {uiState.level}
                 </h2>
                 <button
                   type="button"
@@ -2782,7 +2843,7 @@ export default function App() {
                   className="bg-white text-blue-600 px-8 py-4 rounded-full font-bold flex items-center gap-2 transition-all hover:bg-zinc-100 active:scale-95 mx-auto"
                 >
                   <Play size={20} fill="currentColor" />
-                  START LEVEL {gameState.level + 1}
+                  START LEVEL {uiState.level + 1}
                 </button>
               </div>
             </motion.div>
@@ -2839,7 +2900,7 @@ export default function App() {
             </div>
           </div>
         )}
-        {isPaused && gameState.isStarted && !gameState.isGameOver && (
+        {isPaused && uiState.isStarted && !uiState.isGameOver && (
           <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-600/60 flex items-center gap-3">
             <div className="w-8 h-8 rounded bg-zinc-500/20 flex items-center justify-center text-zinc-300 text-lg shrink-0">
               ⏸
