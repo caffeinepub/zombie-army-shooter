@@ -25,39 +25,33 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2 } from "lucide-react";
 import { useGetTopScores, useSubmitScore } from "./hooks/useLeaderboard";
+
 // --- Constants ---
 const CANVAS_WIDTH = 400;
 const CANVAS_HEIGHT = 600;
 const PLAYER_Y = CANVAS_HEIGHT - 80;
-const UNIT_RADIUS = 8; // Smaller, uniform size
+const UNIT_RADIUS = 8;
 const BULLET_SPEED = 7;
 const ZOMBIE_SPEED_BASE = 1.0;
 const GATE_SPEED = 1.5;
-const SPAWN_RATE_ZOMBIE = 60; // More frequent base spawn
-const SPAWN_RATE_GATE = 300; // frames
+const SPAWN_RATE_ZOMBIE = 60;
+const SPAWN_RATE_GATE = 300;
 const MAX_ARMY_SIZE = 75;
-
 const PLAYER_SPEED = 4;
 
-// Helper to get army unit positions
 const getArmyPositions = (playerX: number, armySize: number) => {
   const positions: { x: number; y: number }[] = [];
-  const spacing = 12; // More compact spacing
+  const spacing = 12;
 
   for (let i = 0; i < armySize; i++) {
     if (i === 0) {
-      // Main unit at the center
       positions.push({ x: playerX, y: PLAYER_Y });
       continue;
     }
-
-    // Fermat's spiral (Golden Angle) for circular distribution
     const angle = i * 137.508 * (Math.PI / 180);
     const radius = Math.sqrt(i) * spacing;
-
     const offsetX = Math.cos(angle) * radius;
     const offsetY = Math.sin(angle) * radius;
-
     positions.push({ x: playerX + offsetX, y: PLAYER_Y + offsetY });
   }
   return positions;
@@ -94,7 +88,7 @@ interface Zombie {
   type: "NORMAL" | "TANK" | "BOSS_RANGED" | "BOSS_GIANT";
   id: number;
   shootTimer?: number;
-  attackAnimTimer?: number; // Frames remaining for attack animation
+  attackAnimTimer?: number;
 }
 
 interface ZombieBullet {
@@ -117,6 +111,7 @@ interface Gate {
   pairId?: number;
   hitProgress?: number;
   trapPenaltyTaken?: number;
+  bulletHitFlash?: number;
 }
 
 interface Explosion {
@@ -132,7 +127,7 @@ interface FloatingText {
   y: number;
   text: string;
   color: string;
-  life: number; // 0 to 1
+  life: number;
   id: number;
 }
 
@@ -140,13 +135,22 @@ interface DyingSoldier {
   x: number;
   y: number;
   angle: number;
-  life: number; // in frames
+  life: number;
   id: number;
 }
 
 interface SpawnFlash {
   index: number;
-  life: number; // in frames
+  life: number;
+}
+
+interface BackgroundElement {
+  x: number;
+  y: number;
+  type: "RUBBLE" | "CRACK" | "WALL";
+  size: number;
+  rotation: number;
+  id: number;
 }
 
 interface GameState {
@@ -157,8 +161,8 @@ interface GameState {
   weaponLevel: number;
   score: number;
   level: number;
-  levelTimer: number; // in frames
-  levelUpTimer: number; // in frames
+  levelTimer: number;
+  levelUpTimer: number;
   bullets: Bullet[];
   zombies: Zombie[];
   zombieBullets: ZombieBullet[];
@@ -167,8 +171,9 @@ interface GameState {
   floatingTexts: FloatingText[];
   dyingSoldiers: DyingSoldier[];
   spawnFlashes: SpawnFlash[];
+  backgroundElements: BackgroundElement[];
   frame: number;
-  specialTimer: number; // in frames
+  specialTimer: number;
   activeSpecial: "NONE" | "CURVED" | "EXPLOSIVE";
   bulletDamage: number;
   isGameOver: boolean;
@@ -176,7 +181,7 @@ interface GameState {
   isVictory: boolean;
   isLevelTransition: boolean;
   flashTimer: number;
-  hitFlashTimer: number; // Frames remaining for player hit flash
+  hitFlashTimer: number;
   shootMode: "AIM" | "STRAIGHT";
   isAutoShoot: boolean;
 }
@@ -196,13 +201,11 @@ const drawSoldier = (
   ctx.translate(x, y);
   ctx.rotate(angle);
 
-  // Shadow
   ctx.fillStyle = "rgba(0,0,0,0.3)";
   ctx.beginPath();
   ctx.ellipse(0, 4, 10, 6, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Set glow if needed for silhouette
   if (hitFlashTimer > 0) {
     ctx.shadowBlur = 12;
     ctx.shadowColor = "#ef4444";
@@ -211,77 +214,63 @@ const drawSoldier = (
     ctx.shadowColor = "#22c55e";
   }
 
-  // Body (Camo/Uniform)
   let bodyColor = isMain ? "#1e3a8a" : "#3b82f6";
-  if (hitFlashTimer > 0) {
-    bodyColor = "#ef4444"; // Flash red when hit
-  } else if (spawnFlashTimer > 0) {
-    bodyColor = "#22c55e"; // Flash green when spawned
-  }
+  if (hitFlashTimer > 0) bodyColor = "#ef4444";
+  else if (spawnFlashTimer > 0) bodyColor = "#22c55e";
 
   ctx.fillStyle = bodyColor;
   ctx.beginPath();
   ctx.roundRect(-8, -10, 16, 20, 4);
   ctx.fill();
 
-  // Tactical Vest
   ctx.fillStyle =
     hitFlashTimer > 0 ? "#7f1d1d" : spawnFlashTimer > 0 ? "#14532d" : "#1e293b";
   ctx.fillRect(-6, -6, 12, 12);
 
-  // Helmet
   ctx.fillStyle =
     hitFlashTimer > 0 ? "#991b1b" : spawnFlashTimer > 0 ? "#166534" : "#0f172a";
   ctx.beginPath();
   ctx.arc(0, -2, 7, 0, Math.PI * 2);
   ctx.fill();
 
-  // Reset shadow for gun and arms
   ctx.shadowBlur = 0;
 
-  // Gun Logic
   ctx.fillStyle = "#000";
   if (weaponLevel < 4) {
-    // Tier 1: Pistol/SMG
-    ctx.fillRect(4, -2, 8, 3); // Barrel
-    ctx.fillRect(4, 0, 3, 4); // Grip
+    ctx.fillRect(4, -2, 8, 3);
+    ctx.fillRect(4, 0, 3, 4);
   } else if (weaponLevel < 8) {
-    // Tier 2: Assault Rifle
-    ctx.fillRect(4, -3, 16, 4); // Barrel
-    ctx.fillRect(4, -1, 4, 6); // Grip
+    ctx.fillRect(4, -3, 16, 4);
+    ctx.fillRect(4, -1, 4, 6);
     ctx.fillStyle = "#333";
-    ctx.fillRect(8, -5, 6, 3); // Scope
+    ctx.fillRect(8, -5, 6, 3);
   } else if (weaponLevel < 13) {
-    // Tier 3: Heavy Machine Gun
     ctx.fillStyle = "#111";
-    ctx.fillRect(4, -4, 18, 6); // Thick Barrel
-    ctx.fillRect(4, 0, 5, 8); // Grip
+    ctx.fillRect(4, -4, 18, 6);
+    ctx.fillRect(4, 0, 5, 8);
     ctx.fillStyle = "#444";
-    ctx.fillRect(10, 2, 6, 6); // Drum Mag
+    ctx.fillRect(10, 2, 6, 6);
   } else if (weaponLevel < 20) {
-    // Tier 4: Plasma Rifle
     ctx.fillStyle = "#0f172a";
-    ctx.fillRect(4, -5, 20, 8); // Bulk Body
+    ctx.fillRect(4, -5, 20, 8);
     ctx.fillStyle = "#3b82f6";
-    ctx.fillRect(8, -3, 14, 4); // Energy Core
+    ctx.fillRect(8, -3, 14, 4);
     ctx.shadowBlur = 5;
     ctx.shadowColor = "#3b82f6";
     ctx.strokeRect(8, -3, 14, 4);
     ctx.shadowBlur = 0;
   } else {
-    // Tier 5: Railgun
     ctx.fillStyle = "#000";
-    ctx.fillRect(4, -6, 24, 10); // Massive Body
+    ctx.fillRect(4, -6, 24, 10);
     ctx.fillStyle = "#facc15";
-    ctx.fillRect(6, -2, 20, 2); // Rail 1
-    ctx.fillRect(6, 2, 20, 2); // Rail 2
+    ctx.fillRect(6, -2, 20, 2);
+    ctx.fillRect(6, 2, 20, 2);
     ctx.shadowBlur = 10;
     ctx.shadowColor = "#facc15";
-    ctx.fillRect(22, -4, 4, 8); // Muzzle Flash Point
+    ctx.fillRect(22, -4, 4, 8);
     ctx.shadowBlur = 0;
   }
 
-  // Arms
   ctx.strokeStyle = isMain ? "#1e3a8a" : "#3b82f6";
   ctx.lineWidth = 4;
   ctx.lineCap = "round";
@@ -304,23 +293,19 @@ const drawZombie = (
 ) => {
   ctx.save();
 
-  // Lunge effect when attacking
   const lunge = attackAnimTimer > 0 ? (10 - attackAnimTimer) * 2 : 0;
   ctx.translate(x, y + lunge);
 
-  // Swaying animation
   const sway = Math.sin(frame * 0.1) * 0.1;
   ctx.rotate(sway);
 
-  // Shadow
   ctx.fillStyle = "rgba(0,0,0,0.3)";
   ctx.beginPath();
   ctx.ellipse(0, radius * 0.5, radius * 1.2, radius * 0.6, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Body (Tattered clothes)
-  let bodyColor = "#166534"; // Dark green
-  let skinColor = "#4ade80"; // Pale green
+  let bodyColor = "#166534";
+  let skinColor = "#4ade80";
 
   if (type === "TANK") {
     bodyColor = "#064e3b";
@@ -335,20 +320,16 @@ const drawZombie = (
   ctx.roundRect(-radius * 0.8, -radius, radius * 1.6, radius * 2, 4);
   ctx.fill();
 
-  // Torn parts
   ctx.fillStyle = "rgba(0,0,0,0.2)";
   ctx.fillRect(-radius * 0.4, 0, radius * 0.2, radius * 0.5);
 
-  // Head
   ctx.fillStyle = skinColor;
   ctx.beginPath();
-  // Biting animation: head moves down slightly
   const biteOffset =
     attackAnimTimer > 0 ? Math.sin(attackAnimTimer * 0.5) * 4 : 0;
   ctx.arc(0, -radius * 0.6 + biteOffset, radius * 0.8, 0, Math.PI * 2);
   ctx.fill();
 
-  // Eyes (Glowing Red)
   ctx.shadowBlur = 5;
   ctx.shadowColor = "#ef4444";
   ctx.fillStyle = "#ef4444";
@@ -358,10 +339,8 @@ const drawZombie = (
   ctx.fill();
   ctx.shadowBlur = 0;
 
-  // Mouth (Gaping/Biting)
   ctx.fillStyle = "#000";
   ctx.beginPath();
-  // Mouth opens wider when biting
   const mouthScale = attackAnimTimer > 0 ? 1.5 : 1;
   ctx.ellipse(
     0,
@@ -374,11 +353,8 @@ const drawZombie = (
   );
   ctx.fill();
 
-  // Arms (Reaching out)
   ctx.fillStyle = skinColor;
   const armSway = Math.sin(frame * 0.15) * 5;
-
-  // Extend arms more when attacking
   const attackReach = attackAnimTimer > 0 ? 10 : 0;
   ctx.fillRect(
     -radius * 1.1,
@@ -393,7 +369,6 @@ const drawZombie = (
     radius * 0.4,
   );
 
-  // Add a "slash" effect if attacking
   if (attackAnimTimer > 5) {
     ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
     ctx.lineWidth = 3;
@@ -401,7 +376,6 @@ const drawZombie = (
     ctx.moveTo(-radius * 1.5, radius);
     ctx.lineTo(radius * 1.5, radius + 10);
     ctx.stroke();
-
     ctx.beginPath();
     ctx.moveTo(radius * 1.5, radius);
     ctx.lineTo(-radius * 1.5, radius + 10);
@@ -411,38 +385,55 @@ const drawZombie = (
   ctx.restore();
 };
 
+const isMobileDevice = () =>
+  typeof window !== "undefined" &&
+  (/Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent) ||
+    navigator.maxTouchPoints > 1);
+
+const makeInitialState = (isStarted: boolean): GameState => ({
+  playerX: CANVAS_WIDTH / 2,
+  health: 100,
+  armySize: 1,
+  weaponLevel: 1,
+  score: 0,
+  level: 1,
+  levelTimer: 60 * 60,
+  levelUpTimer: 0,
+  bullets: [],
+  zombies: [],
+  zombieBullets: [],
+  gates: [],
+  explosions: [],
+  floatingTexts: [],
+  dyingSoldiers: [],
+  spawnFlashes: [],
+  backgroundElements: Array.from({ length: 20 }, (_, i) => ({
+    x: Math.random() * CANVAS_WIDTH,
+    y: Math.random() * CANVAS_HEIGHT,
+    type: (["RUBBLE", "CRACK", "WALL"] as const)[Math.floor(Math.random() * 3)],
+    size: 10 + Math.random() * 30,
+    rotation: Math.random() * Math.PI * 2,
+    id: i,
+  })),
+  frame: 0,
+  specialTimer: 0,
+  activeSpecial: "NONE",
+  bulletDamage: 1,
+  isGameOver: false,
+  isStarted,
+  isVictory: false,
+  isLevelTransition: false,
+  flashTimer: 0,
+  hitFlashTimer: 0,
+  shootMode: "AIM",
+  isAutoShoot: isMobileDevice(),
+});
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [gameState, setGameState] = useState<GameState>({
-    playerX: CANVAS_WIDTH / 2,
-    health: 100,
-    armySize: 1,
-    weaponLevel: 1,
-    score: 0,
-    level: 1,
-    levelTimer: 60 * 60,
-    levelUpTimer: 0,
-    bullets: [],
-    zombies: [],
-    zombieBullets: [],
-    gates: [],
-    explosions: [],
-    floatingTexts: [],
-    dyingSoldiers: [],
-    spawnFlashes: [],
-    frame: 0,
-    specialTimer: 0,
-    activeSpecial: "NONE",
-    bulletDamage: 1,
-    isGameOver: false,
-    isStarted: false,
-    isVictory: false,
-    isLevelTransition: false,
-    flashTimer: 0,
-    hitFlashTimer: 0,
-    shootMode: "AIM",
-    isAutoShoot: false,
-  });
+  const [gameState, setGameState] = useState<GameState>(
+    makeInitialState(false),
+  );
 
   // Leaderboard state
   const [showLeaderboard, setShowLeaderboard] = useState(false);
@@ -451,12 +442,6 @@ export default function App() {
   const { data: topScores, refetch: refetchScores } = useGetTopScores();
   const submitScoreMutation = useSubmitScore();
 
-  // Reset submission state when game restarts
-  const handleStartGame = () => {
-    setScoreSubmitted(false);
-    setPlayerName("");
-    startGame();
-  };
   const requestRef = useRef<number>(null);
   const gameStateRef = useRef<GameState>(gameState);
   const isSpacePressed = useRef(false);
@@ -464,8 +449,9 @@ export default function App() {
   const isAKeyPressed = useRef(false);
   const isDKeyPressed = useRef(false);
   const mousePosRef = useRef({ x: CANVAS_WIDTH / 2, y: 0 });
+  const moveTargetXRef = useRef(CANVAS_WIDTH / 2);
+  const touchActiveRef = useRef(false);
 
-  // Sync ref with state for the game loop
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
@@ -476,25 +462,20 @@ export default function App() {
         isSpacePressed.current = true;
         e.preventDefault();
       }
-      if (e.key.toLowerCase() === "a") {
+      if (e.key.toLowerCase() === "a" || e.key === "ArrowLeft") {
         isAKeyPressed.current = true;
       }
-      if (e.key.toLowerCase() === "d") {
+      if (e.key.toLowerCase() === "d" || e.key === "ArrowRight") {
         isDKeyPressed.current = true;
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        isSpacePressed.current = false;
-      }
-      if (e.key.toLowerCase() === "a") {
+      if (e.code === "Space") isSpacePressed.current = false;
+      if (e.key.toLowerCase() === "a" || e.key === "ArrowLeft")
         isAKeyPressed.current = false;
-      }
-      if (e.key.toLowerCase() === "d") {
+      if (e.key.toLowerCase() === "d" || e.key === "ArrowRight")
         isDKeyPressed.current = false;
-      }
     };
-
     const handlePointerDown = () => {
       isPointerDown.current = true;
     };
@@ -516,36 +497,13 @@ export default function App() {
   }, []);
 
   const startGame = () => {
-    setGameState({
-      playerX: CANVAS_WIDTH / 2,
-      health: 100,
-      armySize: 1,
-      weaponLevel: 1,
-      score: 0,
-      level: 1,
-      levelTimer: 60 * 60,
-      levelUpTimer: 0,
-      bullets: [],
-      zombies: [],
-      zombieBullets: [],
-      gates: [],
-      explosions: [],
-      floatingTexts: [],
-      dyingSoldiers: [],
-      spawnFlashes: [],
-      frame: 0,
-      specialTimer: 0,
-      activeSpecial: "NONE",
-      bulletDamage: 1,
-      isGameOver: false,
-      isStarted: true,
-      isVictory: false,
-      isLevelTransition: false,
-      flashTimer: 0,
-      hitFlashTimer: 0,
-      shootMode: "AIM",
-      isAutoShoot: false,
-    });
+    setGameState(makeInitialState(true));
+  };
+
+  const handleStartGame = () => {
+    setScoreSubmitted(false);
+    setPlayerName("");
+    startGame();
   };
 
   const startNextLevel = () => {
@@ -566,26 +524,63 @@ export default function App() {
     }));
   };
 
-  const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
-    let clientX: number;
-    let clientY: number;
-    if ("touches" in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
-
+  const getCanvasPos = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (canvas) {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = CANVAS_WIDTH / rect.width;
-      const scaleY = CANVAS_HEIGHT / rect.height;
-      const x = (clientX - rect.left) * scaleX;
-      const y = (clientY - rect.top) * scaleY;
-      mousePosRef.current = { x, y };
+    if (!canvas) return { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) * (CANVAS_WIDTH / rect.width),
+      y: (clientY - rect.top) * (CANVAS_HEIGHT / rect.height),
+    };
+  };
+
+  // Desktop mouse: moves player AND aims
+  const handleMouseMove = (e: React.MouseEvent) => {
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    mousePosRef.current = pos;
+    moveTargetXRef.current = Math.max(
+      UNIT_RADIUS,
+      Math.min(CANVAS_WIDTH - UNIT_RADIUS, pos.x),
+    );
+  };
+
+  // Touch: finger 1 = movement, finger 2 = aim
+  const updateTouches = (touches: React.TouchList) => {
+    touchActiveRef.current = touches.length > 0;
+    if (touches.length >= 1) {
+      const pos = getCanvasPos(touches[0].clientX, touches[0].clientY);
+      moveTargetXRef.current = Math.max(
+        UNIT_RADIUS,
+        Math.min(CANVAS_WIDTH - UNIT_RADIUS, pos.x),
+      );
     }
+    if (touches.length >= 2) {
+      const pos = getCanvasPos(touches[1].clientX, touches[1].clientY);
+      mousePosRef.current = pos;
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
+    updateTouches(e.touches);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    e.preventDefault();
+    updateTouches(e.touches);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    e.preventDefault();
+    touchActiveRef.current = e.touches.length > 0;
+    if (e.touches.length >= 1) {
+      const pos = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY);
+      moveTargetXRef.current = Math.max(
+        UNIT_RADIUS,
+        Math.min(CANVAS_WIDTH - UNIT_RADIUS, pos.x),
+      );
+    }
+    // Keep last aim position when second finger lifts
   };
 
   const update = () => {
@@ -598,28 +593,22 @@ export default function App() {
       ZOMBIE_SPEED_BASE * (1 + (newState.level - 1) * 0.1);
 
     newState.frame++;
-    if (newState.flashTimer > 0) {
-      newState.flashTimer--;
-    }
-    if (newState.hitFlashTimer > 0) {
-      newState.hitFlashTimer--;
-    }
+    if (newState.flashTimer > 0) newState.flashTimer--;
+    if (newState.hitFlashTimer > 0) newState.hitFlashTimer--;
 
-    // Update Dying Soldiers
     newState.dyingSoldiers = newState.dyingSoldiers
       .map((s) => ({ ...s, life: s.life - 1 }))
       .filter((s) => s.life > 0);
 
-    // Update Spawn Flashes
     newState.spawnFlashes = newState.spawnFlashes
       .map((f) => ({ ...f, life: f.life - 1 }))
       .filter((f) => f.life > 0);
+
     if (newState.specialTimer > 0) {
       newState.specialTimer--;
-      if (newState.specialTimer === 0) {
-        newState.activeSpecial = "NONE";
-      }
+      if (newState.specialTimer === 0) newState.activeSpecial = "NONE";
     }
+
     if (newState.isLevelTransition) {
       setGameState(newState);
       requestRef.current = requestAnimationFrame(update);
@@ -630,14 +619,11 @@ export default function App() {
     if (newState.levelTimer > 0) {
       newState.levelTimer--;
     } else {
-      // Soft limit reached. Wait for zombies and gates to clear.
       const noZombies = newState.zombies.length === 0;
       const noGates = newState.gates.length === 0;
-
       if (noZombies && noGates) {
         if (newState.level < 5) {
           newState.isLevelTransition = true;
-          // Clear screen of immediate threats (bullets, explosions)
           newState.bullets = [];
           newState.explosions = [];
         } else {
@@ -659,7 +645,6 @@ export default function App() {
           (isGracePeriod ? currentSpawnRate * 2 : currentSpawnRate) ===
         0
       ) {
-        // Chance to spawn a boss instead of a horde
         const isBossSpawn =
           !isGracePeriod &&
           newState.frame % (currentSpawnRate * 10) === 0 &&
@@ -668,12 +653,11 @@ export default function App() {
         if (isBossSpawn) {
           const isGiant = Math.random() > 0.5;
           const levelScale = 1 + (newState.level - 1) * 0.2;
-
           newState.zombies.push({
             x: Math.random() * (CANVAS_WIDTH - 100) + 50,
             y: -50,
-            health: isGiant ? 100 * levelScale : 40 * levelScale,
-            maxHealth: isGiant ? 100 * levelScale : 40 * levelScale,
+            health: isGiant ? 600 * levelScale : 120 * levelScale,
+            maxHealth: isGiant ? 600 * levelScale : 120 * levelScale,
             speed: currentZombieSpeedBase * (isGiant ? 0.4 : 0.7),
             radius: isGiant
               ? UNIT_RADIUS * 4 * levelScale
@@ -683,8 +667,6 @@ export default function App() {
             shootTimer: isGiant ? undefined : 60,
           });
         } else {
-          // Spawn a horde (cluster) of zombies
-          // Algorithmic Balancing: Scale horde size with army size
           const armyScale = Math.max(
             0.5,
             Math.min(2.0, newState.armySize / 15),
@@ -694,17 +676,13 @@ export default function App() {
             3 +
             Math.floor(newState.level * 0.8);
           const hordeSize = Math.floor(baseHordeSize * armyScale);
-
           const centerX = Math.random() * (CANVAS_WIDTH - 100) + 50;
 
           for (let i = 0; i < hordeSize; i++) {
             const isTank = Math.random() > 0.9;
-            // Always include small zombies (40% chance of being level 1 size)
             const isSmall = Math.random() < 0.4;
             const levelScale = isSmall ? 1 : 1 + (newState.level - 1) * 0.15;
             const baseRadius = isTank ? UNIT_RADIUS * 1.5 : UNIT_RADIUS;
-
-            // Algorithmic Balancing: Scale zombie health with army size
             const armyHealthScale = Math.max(
               0.6,
               Math.min(2.5, newState.armySize / 10),
@@ -713,11 +691,10 @@ export default function App() {
               (isTank ? 15 : 5) *
               (1 + (newState.level - 1) * 0.2) *
               armyHealthScale;
-
             newState.zombies.push({
               x: centerX + (Math.random() - 0.5) * 80,
               y: -50 - Math.random() * 50,
-              health: health,
+              health,
               maxHealth: health,
               speed:
                 currentZombieSpeedBase *
@@ -736,40 +713,35 @@ export default function App() {
         SPAWN_RATE_GATE - (newState.level - 1) * 30,
       );
       if (newState.frame % currentGateRate === 0) {
-        const isChoicePair = Math.random() > 0.5; // 50% chance of choice pair
+        const isChoicePair = Math.random() > 0.5;
 
         if (isChoicePair) {
           const pairId = Date.now();
-
-          // Algorithmic Balancing: Increase positive gate chance for small armies, decrease for large ones
           let positiveChance = 0.6;
           if (newState.armySize < 10) positiveChance = 0.85;
           if (newState.armySize > 35) positiveChance = 0.4;
-          if (isGracePeriod) positiveChance = 1.0; // Guaranteed positive in grace period
+          if (isGracePeriod) positiveChance = 1.0;
 
           const isPositive = Math.random() < positiveChance;
           const leftIsPrimary = Math.random() > 0.5;
-
           const typeA: GateType = isPositive ? "ADD" : "SUB";
           const typeB: GateType = isPositive ? "MULT" : "DIV";
 
-          // Adapt values to army size
           const valA = isPositive
-            ? Math.min(15, Math.floor(newState.armySize * 0.4) + 8) // More generous ADD
+            ? Math.min(15, Math.floor(newState.armySize * 0.4) + 8)
             : -(
                 Math.floor(
                   newState.armySize * (Math.random() > 0.8 ? 2.5 : 1.2),
                 ) + 20
-              ); // More punishing SUB
+              );
           const valB = isPositive
             ? Math.random() > 0.8
               ? 3
               : 2
             : newState.armySize > 30
               ? 3
-              : 2; // More frequent DIV for large armies
+              : 2;
 
-          // In grace period, ensure SUB/DIV are not too bad if they somehow spawn (though positiveChance is 1.0)
           const finalValA = isGracePeriod && !isPositive ? -5 : valA;
           const finalValB = isGracePeriod && !isPositive ? 2 : valB;
 
@@ -803,19 +775,15 @@ export default function App() {
             "UPGRADE",
             "RATE_UPGRADE",
           ];
-
-          // Algorithmic Balancing: Adjust single gate type selection based on army size
           let type = types[Math.floor(Math.random() * types.length)];
 
           if (isGracePeriod) {
             type = Math.random() > 0.5 ? "ADD" : "MULT";
           } else if (newState.armySize < 10) {
-            // Favor positive gates when army is small
             if (["SUB", "DIV", "TRAP"].includes(type) && Math.random() > 0.3) {
               type = Math.random() > 0.5 ? "ADD" : "MULT";
             }
           } else if (newState.armySize > 35) {
-            // Favor negative gates when army is large
             if (
               ["ADD", "MULT", "UPGRADE", "RATE_UPGRADE"].includes(type) &&
               Math.random() > 0.4
@@ -824,7 +792,6 @@ export default function App() {
             }
           }
 
-          // Make UPGRADE, RATE_UPGRADE and SPECIAL rarer
           if (
             (type === "UPGRADE" ||
               type === "RATE_UPGRADE" ||
@@ -835,23 +802,22 @@ export default function App() {
           }
 
           let value = 0;
-          // Adapt values to army size
           if (type === "ADD")
-            value = Math.min(15, Math.floor(newState.armySize * 0.3) + 4); // More generous ADD
+            value = Math.min(15, Math.floor(newState.armySize * 0.3) + 4);
           if (type === "SUB")
             value = -(
               Math.floor(
                 newState.armySize * (Math.random() > 0.7 ? 2.0 : 1.0),
               ) + 20
-            ); // More punishing SUB
+            );
           if (type === "MULT") value = 2;
-          if (type === "DIV") value = newState.armySize > 30 ? 3 : 2; // More frequent DIV for large armies
+          if (type === "DIV") value = newState.armySize > 30 ? 3 : 2;
           if (type === "SPECIAL")
             value = 10 + Math.floor(newState.armySize * 0.5);
-          if (type === "TRAP") value = -1; // Penalty per hit
-          if (type === "UPGRADE") value = 30 + Math.floor(newState.level * 15); // Hits required
+          if (type === "TRAP") value = -1;
+          if (type === "UPGRADE") value = 30 + Math.floor(newState.level * 15);
           if (type === "RATE_UPGRADE")
-            value = 25 + Math.floor(newState.level * 10); // Hits required
+            value = 25 + Math.floor(newState.level * 10);
 
           newState.gates.push({
             x: Math.random() * (CANVAS_WIDTH - 150) + 75,
@@ -868,15 +834,19 @@ export default function App() {
     // --- Movement Logic ---
     if (isAKeyPressed.current) {
       newState.playerX = Math.max(UNIT_RADIUS, newState.playerX - PLAYER_SPEED);
-    }
-    if (isDKeyPressed.current) {
+    } else if (isDKeyPressed.current) {
       newState.playerX = Math.min(
         CANVAS_WIDTH - UNIT_RADIUS,
         newState.playerX + PLAYER_SPEED,
       );
+    } else if (isPointerDown.current || touchActiveRef.current) {
+      const targetX = Math.max(
+        UNIT_RADIUS,
+        Math.min(CANVAS_WIDTH - UNIT_RADIUS, moveTargetXRef.current),
+      );
+      newState.playerX = targetX;
     }
 
-    // Smooth player movement for better feel
     const targetX = newState.playerX;
     if (newState.smoothPlayerX === undefined) newState.smoothPlayerX = targetX;
     newState.smoothPlayerX += (targetX - newState.smoothPlayerX) * 0.15;
@@ -889,7 +859,6 @@ export default function App() {
         newState.isAutoShoot) &&
       newState.frame % shootInterval === 0
     ) {
-      // Each unit in the army fires a bullet
       const positions = getArmyPositions(
         newState.smoothPlayerX ?? newState.playerX,
         newState.armySize,
@@ -897,46 +866,38 @@ export default function App() {
       const mouseX = mousePosRef.current.x;
       const mouseY = mousePosRef.current.y;
 
-      for (const pos of positions) {
+      // biome-ignore lint/complexity/noForEach: game loop performance
+      positions.forEach((pos) => {
         let baseAngle: number;
-
         if (newState.shootMode === "STRAIGHT") {
-          // Shoot straight up
           baseAngle = -Math.PI / 2;
         } else {
-          // Shoot towards the mouse/touch point
           const dx = mouseX - pos.x;
           const dy = mouseY - pos.y;
           baseAngle = Math.atan2(dy, dx);
         }
-
-        // Add random spread to the shooting angle
-        const spreadAmount = newState.shootMode === "STRAIGHT" ? 0.4 : 0.25; // Wider spread for straight fire
+        const spreadAmount = newState.shootMode === "STRAIGHT" ? 0.4 : 0.25;
         const angle = baseAngle + (Math.random() - 0.5) * spreadAmount;
-
-        const vx = Math.cos(angle) * BULLET_SPEED;
-        const vy = Math.sin(angle) * BULLET_SPEED;
-
         newState.bullets.push({
           x: pos.x,
           y: pos.y,
-          vx,
-          vy,
+          vx: Math.cos(angle) * BULLET_SPEED,
+          vy: Math.sin(angle) * BULLET_SPEED,
           specialType: newState.activeSpecial,
           life: 0,
           id: Date.now() + Math.random(),
           hitGateIds: [],
         });
-      }
+      });
     }
 
     // --- Update Entities ---
-    // Boss Shooting Logic
-    for (const z of newState.zombies) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    newState.zombies.forEach((z) => {
       if (z.type === "BOSS_RANGED" && z.shootTimer !== undefined) {
         z.shootTimer--;
         if (z.shootTimer <= 0) {
-          z.shootTimer = 90; // Shoot every 1.5s
+          z.shootTimer = 90;
           const dx = newState.playerX - z.x;
           const dy = PLAYER_Y - z.y;
           const dist = Math.hypot(dx, dy) || 1;
@@ -952,15 +913,13 @@ export default function App() {
           });
         }
       }
-    }
+    });
 
     newState.bullets = newState.bullets
       .map((b) => {
         let nx = b.x + b.vx;
         let ny = b.y + b.vy;
-
         if (b.specialType === "CURVED") {
-          // Add a curving effect (perpendicular to velocity)
           const speed = Math.hypot(b.vx, b.vy);
           const perpX = -b.vy / speed;
           const perpY = b.vx / speed;
@@ -968,7 +927,6 @@ export default function App() {
           nx += perpX * curveAmount;
           ny += perpY * curveAmount;
         }
-
         return { ...b, x: nx, y: ny, life: b.life + 1 };
       })
       .filter(
@@ -980,23 +938,22 @@ export default function App() {
       );
 
     newState.zombies = newState.zombies
-      .map((z) => {
-        const nextAttackAnimTimer =
-          (z.attackAnimTimer || 0) > 0 ? z.attackAnimTimer! - 1 : 0;
-        return { ...z, y: z.y + z.speed, attackAnimTimer: nextAttackAnimTimer };
-      })
+      .map((z) => ({
+        ...z,
+        y: z.y + z.speed,
+        attackAnimTimer:
+          (z.attackAnimTimer || 0) > 0 ? z.attackAnimTimer! - 1 : 0,
+      }))
       .filter((z) => {
         if (z.y >= CANVAS_HEIGHT) {
-          newState.health -= 5; // Penalty for escaping
+          newState.health -= 5;
           return false;
         }
         return true;
       });
 
     newState.zombieBullets = newState.zombieBullets
-      .map((b) => {
-        return { ...b, x: b.x + b.vx, y: b.y + b.vy };
-      })
+      .map((b) => ({ ...b, x: b.x + b.vx, y: b.y + b.vy }))
       .filter(
         (b) =>
           b.y < CANVAS_HEIGHT + 50 &&
@@ -1006,34 +963,30 @@ export default function App() {
       );
 
     newState.gates = newState.gates
-      .map((g) => {
-        return { ...g, y: g.y + currentGateSpeed };
-      })
+      .map((g) => ({
+        ...g,
+        y: g.y + currentGateSpeed,
+        bulletHitFlash:
+          g.bulletHitFlash && g.bulletHitFlash > 0 ? g.bulletHitFlash - 1 : 0,
+      }))
       .filter((g) => g.y < CANVAS_HEIGHT + 100);
 
-    // --- Explosion Logic ---
     newState.explosions = newState.explosions
-      .map((e) => ({
-        ...e,
-        radius: e.radius + 2,
-      }))
+      .map((e) => ({ ...e, radius: e.radius + 2 }))
       .filter((e) => e.radius < e.maxRadius);
 
-    for (const e of newState.explosions) {
-      for (const z of newState.zombies) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    newState.explosions.forEach((e) => {
+      // biome-ignore lint/complexity/noForEach: game loop performance
+      newState.zombies.forEach((z) => {
         const dist = Math.hypot(z.x - e.x, z.y - e.y);
-        if (dist < e.radius + 20) {
-          z.health -= 0.05; // Continuous damage while in explosion
-        }
-      }
-    }
+        if (dist < e.radius + 20) z.health -= 0.05;
+      });
+    });
 
-    // Update Floating Texts
     newState.floatingTexts = newState.floatingTexts
       .map((t) => ({ ...t, y: t.y - 1, life: t.life - 0.02 }))
       .filter((t) => t.life > 0);
-
-    // --- Collision Logic ---
 
     // Bullets vs Zombies
     newState.bullets = newState.bullets.filter((b) => {
@@ -1044,8 +997,6 @@ export default function App() {
           hit = true;
           const damage =
             (1 + newState.weaponLevel * 0.5) * newState.bulletDamage;
-
-          // Hit effect
           newState.explosions.push({
             x: b.x,
             y: b.y,
@@ -1053,7 +1004,6 @@ export default function App() {
             maxRadius: b.specialType === "EXPLOSIVE" ? 60 : 15,
             id: Date.now() + Math.random(),
           });
-
           return { ...z, health: z.health - damage };
         }
         return z;
@@ -1067,12 +1017,9 @@ export default function App() {
       newState.zombieBullets = newState.zombieBullets.map((zb) => {
         const dist = Math.hypot(b.x - zb.x, b.y - zb.y);
         if (dist < 15 && !hit) {
-          // Zombie bullets are a bit larger
           hit = true;
           const damage =
             (1 + newState.weaponLevel * 0.5) * newState.bulletDamage;
-
-          // Hit effect
           newState.explosions.push({
             x: b.x,
             y: b.y,
@@ -1080,7 +1027,6 @@ export default function App() {
             maxRadius: b.specialType === "EXPLOSIVE" ? 60 : 15,
             id: Date.now() + Math.random(),
           });
-
           return { ...zb, health: zb.health - damage };
         }
         return zb;
@@ -1088,44 +1034,33 @@ export default function App() {
       return !hit;
     });
 
-    // Remove dead zombie bullets
     newState.zombieBullets = newState.zombieBullets.filter(
       (zb) => zb.health > 0,
     );
 
     // Bullets vs Gates
     newState.bullets = newState.bullets.map((b) => {
-      let updatedBullet = { ...b };
+      const updatedBullet = { ...b };
       newState.gates = newState.gates.map((g) => {
         const inX = b.x > g.x - g.width / 2 && b.x < g.x + g.width / 2;
         const inY = b.y > g.y - 20 && b.y < g.y + 20;
         const alreadyHit = b.hitGateIds?.includes(g.id);
-
         if (inX && inY && !alreadyHit) {
           if (!updatedBullet.hitGateIds) updatedBullet.hitGateIds = [];
           updatedBullet.hitGateIds.push(g.id);
-          if (g.type === "ADD") {
+          g.bulletHitFlash = 8;
+          if (g.type === "ADD" || g.type === "SUB") {
             const newProgress = (g.hitProgress || 0) + 1;
-            if (newProgress >= 2) {
+            if (newProgress >= 2)
               return { ...g, value: Math.min(15, g.value + 1), hitProgress: 0 };
-            }
             return { ...g, hitProgress: newProgress };
           }
-          if (g.type === "SUB") {
-            const newProgress = (g.hitProgress || 0) + 1;
-            if (newProgress >= 2) {
-              return { ...g, value: Math.min(15, g.value + 1), hitProgress: 0 };
-            }
-            return { ...g, hitProgress: newProgress };
-          }
-          if (g.type === "SPECIAL") {
-            return { ...g, value: g.value - 1 };
-          }
+          if (g.type === "SPECIAL") return { ...g, value: g.value - 1 };
           if (g.type === "UPGRADE") {
             const newValue = g.value - 1;
             if (newValue <= 0) {
               newState.bulletDamage += 0.5;
-              newState.flashTimer = 10; // Screen flash
+              newState.flashTimer = 10;
               return { ...g, value: 0 };
             }
             return { ...g, value: newValue };
@@ -1134,25 +1069,24 @@ export default function App() {
             const newValue = g.value - 1;
             if (newValue <= 0) {
               newState.weaponLevel++;
-              newState.flashTimer = 10; // Screen flash
+              newState.flashTimer = 10;
               return { ...g, value: 0 };
             }
             return { ...g, value: newValue };
           }
           if (g.type === "TRAP") {
-            // Shooting a trap gate reduces army size, but cap it at 10 per gate
             const penaltyTaken = g.trapPenaltyTaken || 0;
             if (penaltyTaken < 10) {
-              // Handle dying soldier for TRAP
               const currentPositions = getArmyPositions(
                 newState.smoothPlayerX ?? newState.playerX,
                 newState.armySize,
               );
               const pos = currentPositions[currentPositions.length - 1];
               if (pos) {
-                const mouseX = mousePosRef.current.x;
-                const mouseY = mousePosRef.current.y;
-                const angle = Math.atan2(mouseY - pos.y, mouseX - pos.x);
+                const angle = Math.atan2(
+                  mousePosRef.current.y - pos.y,
+                  mousePosRef.current.x - pos.x,
+                );
                 newState.dyingSoldiers.push({
                   x: pos.x,
                   y: pos.y,
@@ -1161,34 +1095,29 @@ export default function App() {
                   id: Date.now() + Math.random(),
                 });
               }
-
               newState.armySize = Math.max(1, newState.armySize - 1);
               return { ...g, trapPenaltyTaken: penaltyTaken + 1 };
             }
             return g;
           }
-          // MULT and DIV are now fixed numbers and cannot be changed by shooting
         }
         return g;
       });
       return updatedBullet;
     });
-    // Remove UPGRADE and RATE_UPGRADE gates that reached 0
+
     newState.gates = newState.gates.filter(
       (g) =>
         !((g.type === "UPGRADE" || g.type === "RATE_UPGRADE") && g.value <= 0),
     );
 
-    // Remove dead zombies
     const initialZombieCount = newState.zombies.length;
     newState.zombies = newState.zombies.filter((z) => z.health > 0);
     newState.score += (initialZombieCount - newState.zombies.length) * 10;
 
-    // Helper to apply damage (reduces army size before health)
     const applyDamage = (amount: number) => {
-      newState.hitFlashTimer = 10; // Trigger hit flash
+      newState.hitFlashTimer = 10;
       if (newState.armySize > 1) {
-        // Capture positions of soldiers being removed
         const currentPositions = getArmyPositions(
           newState.smoothPlayerX ?? newState.playerX,
           newState.armySize,
@@ -1196,15 +1125,14 @@ export default function App() {
         const newSize = Math.max(1, newState.armySize - amount);
         const removedCount =
           Math.floor(newState.armySize) - Math.floor(newSize);
-
         if (removedCount > 0) {
-          const mouseX = mousePosRef.current.x;
-          const mouseY = mousePosRef.current.y;
-
           for (let i = 0; i < removedCount; i++) {
             const pos = currentPositions[currentPositions.length - 1 - i];
             if (pos) {
-              const angle = Math.atan2(mouseY - pos.y, mouseX - pos.x);
+              const angle = Math.atan2(
+                mousePosRef.current.y - pos.y,
+                mousePosRef.current.x - pos.x,
+              );
               newState.dyingSoldiers.push({
                 x: pos.x,
                 y: pos.y,
@@ -1215,18 +1143,15 @@ export default function App() {
             }
           }
         }
-
         newState.armySize = newSize;
       } else {
-        // Only the leader left, reduce health.
         newState.health -= amount;
       }
     };
 
-    // Player vs Zombies
     const armyPositions = getArmyPositions(newState.playerX, newState.armySize);
+
     newState.zombies = newState.zombies.map((z) => {
-      // Check collision with any unit in the army
       const hitUnit = armyPositions.some(
         (pos) => Math.hypot(pos.x - z.x, pos.y - z.y) < z.radius + UNIT_RADIUS,
       );
@@ -1236,14 +1161,11 @@ export default function App() {
         if (z.type === "BOSS_GIANT") damage = 2.0;
         if (z.type === "BOSS_RANGED") damage = 1.0;
         applyDamage(damage);
-
-        // Trigger attack animation
         return { ...z, attackAnimTimer: 10 };
       }
       return z;
     });
 
-    // Player vs Zombie Bullets
     newState.zombieBullets = newState.zombieBullets.filter((b) => {
       const hitUnit = armyPositions.some(
         (pos) => Math.hypot(pos.x - b.x, pos.y - b.y) < 15,
@@ -1255,15 +1177,17 @@ export default function App() {
       return true;
     });
 
-    // Player vs Gates
     let hitPairId: number | undefined = undefined;
     newState.gates = newState.gates.filter((g) => {
-      // Check collision with any unit in the army
       const hitGate = armyPositions.some(
-        (pos) => Math.hypot(pos.x - g.x, pos.y - g.y) < 40,
+        (pos) =>
+          pos.x > g.x - g.width / 2 - UNIT_RADIUS &&
+          pos.x < g.x + g.width / 2 + UNIT_RADIUS &&
+          pos.y > g.y - 20 - UNIT_RADIUS &&
+          pos.y < g.y + 20 + UNIT_RADIUS,
       );
       if (hitGate) {
-        if (g.type === "UPGRADE") return true; // Must shoot upgrade gates
+        if (g.type === "UPGRADE") return true;
         if (g.type === "ADD" || g.type === "SUB") {
           if (newState.armySize >= MAX_ARMY_SIZE && g.value > 0) {
             const bonus = g.value * 10;
@@ -1277,8 +1201,6 @@ export default function App() {
               id: Date.now() + Math.random(),
             });
           }
-
-          // Handle dying soldiers for SUB
           if (g.value < 0) {
             const currentPositions = getArmyPositions(
               newState.smoothPlayerX ?? newState.playerX,
@@ -1287,14 +1209,14 @@ export default function App() {
             const newSize = Math.max(1, newState.armySize + g.value);
             const removedCount =
               Math.floor(newState.armySize) - Math.floor(newSize);
-
             if (removedCount > 0) {
-              const mouseX = mousePosRef.current.x;
-              const mouseY = mousePosRef.current.y;
               for (let i = 0; i < removedCount; i++) {
                 const pos = currentPositions[currentPositions.length - 1 - i];
                 if (pos) {
-                  const angle = Math.atan2(mouseY - pos.y, mouseX - pos.x);
+                  const angle = Math.atan2(
+                    mousePosRef.current.y - pos.y,
+                    mousePosRef.current.x - pos.x,
+                  );
                   newState.dyingSoldiers.push({
                     x: pos.x,
                     y: pos.y,
@@ -1306,8 +1228,6 @@ export default function App() {
               }
             }
           }
-
-          // Handle spawn flashes for ADD
           if (g.value > 0) {
             const oldSize = Math.floor(newState.armySize);
             const newSize = Math.floor(
@@ -1317,7 +1237,6 @@ export default function App() {
               newState.spawnFlashes.push({ index: i, life: 30 });
             }
           }
-
           newState.armySize = Math.min(
             MAX_ARMY_SIZE,
             Math.max(1, newState.armySize + g.value),
@@ -1335,8 +1254,6 @@ export default function App() {
               id: Date.now() + Math.random(),
             });
           }
-
-          // Handle spawn flashes for MULT
           if (g.value > 1) {
             const oldSize = Math.floor(newState.armySize);
             const newSize = Math.floor(
@@ -1346,7 +1263,6 @@ export default function App() {
               newState.spawnFlashes.push({ index: i, life: 30 });
             }
           }
-
           newState.armySize = Math.min(
             MAX_ARMY_SIZE,
             newState.armySize * g.value,
@@ -1365,8 +1281,6 @@ export default function App() {
               id: Date.now() + Math.random(),
             });
           }
-
-          // Handle dying soldiers for DIV
           if (g.value > 1) {
             const currentPositions = getArmyPositions(
               newState.smoothPlayerX ?? newState.playerX,
@@ -1375,14 +1289,14 @@ export default function App() {
             const newSize = Math.max(1, newState.armySize / g.value);
             const removedCount =
               Math.floor(newState.armySize) - Math.floor(newSize);
-
             if (removedCount > 0) {
-              const mouseX = mousePosRef.current.x;
-              const mouseY = mousePosRef.current.y;
               for (let i = 0; i < removedCount; i++) {
                 const pos = currentPositions[currentPositions.length - 1 - i];
                 if (pos) {
-                  const angle = Math.atan2(mouseY - pos.y, mouseX - pos.x);
+                  const angle = Math.atan2(
+                    mousePosRef.current.y - pos.y,
+                    mousePosRef.current.x - pos.x,
+                  );
                   newState.dyingSoldiers.push({
                     x: pos.x,
                     y: pos.y,
@@ -1394,7 +1308,6 @@ export default function App() {
               }
             }
           }
-
           newState.armySize = Math.max(
             1,
             Math.floor(newState.armySize / g.value),
@@ -1404,9 +1317,8 @@ export default function App() {
           newState.activeSpecial =
             specials[Math.floor(Math.random() * specials.length)];
           newState.weaponLevel++;
-          newState.specialTimer = 20 * 60; // 20 seconds at 60fps
+          newState.specialTimer = 20 * 60;
         } else if (g.type === "TRAP") {
-          // Passing through a trap gate is very bad
           const currentPositions = getArmyPositions(
             newState.smoothPlayerX ?? newState.playerX,
             newState.armySize,
@@ -1417,14 +1329,14 @@ export default function App() {
           );
           const removedCount =
             Math.floor(newState.armySize) - Math.floor(newSize);
-
           if (removedCount > 0) {
-            const mouseX = mousePosRef.current.x;
-            const mouseY = mousePosRef.current.y;
             for (let i = 0; i < removedCount; i++) {
               const pos = currentPositions[currentPositions.length - 1 - i];
               if (pos) {
-                const angle = Math.atan2(mouseY - pos.y, mouseX - pos.x);
+                const angle = Math.atan2(
+                  mousePosRef.current.y - pos.y,
+                  mousePosRef.current.x - pos.x,
+                );
                 newState.dyingSoldiers.push({
                   x: pos.x,
                   y: pos.y,
@@ -1435,33 +1347,26 @@ export default function App() {
               }
             }
           }
-
           newState.armySize = newSize;
           applyDamage(10);
         }
-
-        if (g.pairId) {
-          hitPairId = g.pairId;
-        }
+        if (g.pairId) hitPairId = g.pairId;
         return false;
       }
       return true;
     });
 
-    // If a gate in a pair was hit, remove the other gate in the same pair
     if (hitPairId !== undefined) {
       newState.gates = newState.gates.filter((g) => g.pairId !== hitPairId);
     }
 
-    if (newState.health <= 0) {
-      newState.isGameOver = true;
-    }
+    if (newState.health <= 0) newState.isGameOver = true;
 
     setGameState(newState);
     requestRef.current = requestAnimationFrame(update);
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: game loop intentionally uses ref
+  // biome-ignore lint/correctness/useExhaustiveDependencies: game loop ref pattern
   useEffect(() => {
     if (gameState.isStarted && !gameState.isGameOver) {
       requestRef.current = requestAnimationFrame(update);
@@ -1478,14 +1383,10 @@ export default function App() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Clear
     ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-    // Background - Simple Grid
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Draw Grid
     ctx.strokeStyle = "#222";
     ctx.lineWidth = 1;
     for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
@@ -1501,10 +1402,40 @@ export default function App() {
       ctx.stroke();
     }
 
-    // --- Entity Rendering ---
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.backgroundElements.forEach((el) => {
+      ctx.save();
+      ctx.translate(el.x, el.y);
+      ctx.rotate(el.rotation);
+      ctx.globalAlpha = 0.3;
+      if (el.type === "RUBBLE") {
+        ctx.fillStyle = "#444";
+        ctx.beginPath();
+        ctx.moveTo(-el.size / 2, -el.size / 2);
+        ctx.lineTo(el.size / 2, -el.size / 3);
+        ctx.lineTo(el.size / 3, el.size / 2);
+        ctx.lineTo(-el.size / 3, el.size / 3);
+        ctx.closePath();
+        ctx.fill();
+      } else if (el.type === "CRACK") {
+        ctx.strokeStyle = "#333";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-el.size / 2, 0);
+        ctx.lineTo(0, el.size / 4);
+        ctx.lineTo(el.size / 2, -el.size / 4);
+        ctx.stroke();
+      } else if (el.type === "WALL") {
+        ctx.fillStyle = "#222";
+        ctx.fillRect(-el.size / 2, -el.size / 4, el.size, el.size / 2);
+        ctx.strokeStyle = "#333";
+        ctx.strokeRect(-el.size / 2, -el.size / 4, el.size, el.size / 2);
+      }
+      ctx.restore();
+    });
 
-    // Draw Zombies
-    for (const z of gameState.zombies) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.zombies.forEach((z) => {
       drawZombie(
         ctx,
         z.x,
@@ -1514,11 +1445,9 @@ export default function App() {
         gameState.frame,
         z.attackAnimTimer,
       );
-
       const size = z.radius;
       ctx.save();
       ctx.translate(z.x, z.y);
-
       if (z.type.startsWith("BOSS")) {
         ctx.strokeStyle = "#facc15";
         ctx.lineWidth = 2;
@@ -1527,24 +1456,19 @@ export default function App() {
         ctx.arc(0, 0, size + 5, 0, Math.PI * 2);
         ctx.stroke();
       }
-
-      // Health Bar
       ctx.fillStyle = "#333";
       ctx.fillRect(-size, -size - 15, size * 2, 4);
       ctx.fillStyle = "#ef4444";
       ctx.fillRect(-size, -size - 15, size * 2 * (z.health / z.maxHealth), 4);
-
       ctx.restore();
-    }
+    });
 
-    // Draw Gates (Moved after zombies for visibility)
-    for (const g of gameState.gates) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.gates.forEach((g) => {
       ctx.save();
       ctx.translate(g.x, g.y);
-
       let color = "#71717a";
       let label = "";
-
       if (g.type === "ADD" || g.type === "SUB") {
         if (g.value > 0) {
           color = "#3b82f6";
@@ -1581,38 +1505,42 @@ export default function App() {
         ctx.shadowBlur = 15;
         ctx.shadowColor = color;
       }
-
       ctx.fillStyle = `${color}44`;
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.fillRect(-g.width / 2, -20, g.width, 40);
       ctx.strokeRect(-g.width / 2, -20, g.width, 40);
-
+      // Bullet hit flash highlight
+      if (g.bulletHitFlash && g.bulletHitFlash > 0) {
+        const flashAlpha = g.bulletHitFlash / 8;
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${flashAlpha * 0.8})`;
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = color;
+        ctx.strokeRect(-g.width / 2 - 1, -21, g.width + 2, 42);
+        ctx.restore();
+      }
       ctx.fillStyle = "#fff";
       ctx.font = "bold 16px Inter, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(label, 0, 0);
-
       ctx.restore();
-    }
+    });
 
-    // Draw Player & Army
     const armyPositions = getArmyPositions(
       gameState.smoothPlayerX ?? gameState.playerX,
       gameState.armySize,
     );
     const targetX = mousePosRef.current.x;
     const targetY = mousePosRef.current.y;
-
-    for (const [index, pos] of armyPositions.entries()) {
+    armyPositions.forEach((pos, index) => {
       let angle: number;
       if (gameState.shootMode === "STRAIGHT") {
-        angle = -Math.PI / 2; // Face straight up
+        angle = -Math.PI / 2;
       } else {
-        const dx = targetX - pos.x;
-        const dy = targetY - pos.y;
-        angle = Math.atan2(dy, dx);
+        angle = Math.atan2(targetY - pos.y, targetX - pos.x);
       }
       const spawnFlash = gameState.spawnFlashes?.find((f) => f.index === index);
       drawSoldier(
@@ -1625,18 +1553,18 @@ export default function App() {
         gameState.hitFlashTimer,
         spawnFlash?.life || 0,
       );
-    }
+    });
 
-    // Draw Dying Soldiers
-    for (const s of gameState.dyingSoldiers) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.dyingSoldiers.forEach((s) => {
       ctx.save();
       ctx.globalAlpha = s.life / 30;
-      drawSoldier(ctx, s.x, s.y, s.angle, false, gameState.weaponLevel, 10); // Pass hitFlashTimer=10 to force red color
+      drawSoldier(ctx, s.x, s.y, s.angle, false, gameState.weaponLevel, 10);
       ctx.restore();
-    }
+    });
 
-    // Draw Floating Texts
-    for (const t of gameState.floatingTexts) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.floatingTexts.forEach((t) => {
       ctx.save();
       ctx.globalAlpha = t.life;
       ctx.fillStyle = t.color;
@@ -1646,49 +1574,42 @@ export default function App() {
       ctx.shadowColor = "rgba(0,0,0,0.5)";
       ctx.fillText(t.text, t.x, t.y);
       ctx.restore();
-    }
+    });
 
-    // Draw Zombie Bullets
-    for (const b of gameState.zombieBullets) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.zombieBullets.forEach((b) => {
       ctx.save();
       ctx.translate(b.x, b.y);
-
-      // Glow effect
       ctx.shadowBlur = 15;
       ctx.shadowColor = "#9333ea";
-
-      // Main body
       ctx.fillStyle = "#9333ea";
       ctx.beginPath();
       ctx.arc(0, 0, 8, 0, Math.PI * 2);
       ctx.fill();
-
-      // Inner core
       ctx.fillStyle = "#f0abfc";
       ctx.beginPath();
       ctx.arc(0, 0, 4, 0, Math.PI * 2);
       ctx.fill();
-
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2;
       ctx.stroke();
-
-      // Health bar
       const barWidth = 20;
       const barHeight = 4;
       ctx.fillStyle = "rgba(0,0,0,0.5)";
       ctx.fillRect(-barWidth / 2, -15, barWidth, barHeight);
-
-      const healthPercent = b.health / b.maxHealth;
       ctx.fillStyle = "#ef4444";
-      ctx.fillRect(-barWidth / 2, -15, barWidth * healthPercent, barHeight);
-
+      ctx.fillRect(
+        -barWidth / 2,
+        -15,
+        barWidth * (b.health / b.maxHealth),
+        barHeight,
+      );
       ctx.restore();
-    }
+    });
 
-    // Draw Explosions
     ctx.save();
-    for (const e of gameState.explosions) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.explosions.forEach((e) => {
       const alpha = 1 - e.radius / e.maxRadius;
       ctx.beginPath();
       ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
@@ -1697,11 +1618,11 @@ export default function App() {
       ctx.strokeStyle = `rgba(255, 200, 0, ${alpha})`;
       ctx.lineWidth = 2;
       ctx.stroke();
-    }
+    });
     ctx.restore();
 
-    // Draw Bullets
-    for (const b of gameState.bullets) {
+    // biome-ignore lint/complexity/noForEach: game loop performance
+    gameState.bullets.forEach((b) => {
       ctx.save();
       ctx.fillStyle =
         b.specialType === "CURVED"
@@ -1712,16 +1633,14 @@ export default function App() {
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.specialType !== "NONE" ? 5 : 3, 0, Math.PI * 2);
       ctx.fill();
-
       if (b.specialType !== "NONE") {
         ctx.shadowBlur = 10;
         ctx.shadowColor = b.specialType === "CURVED" ? "#f472b6" : "#fb923c";
         ctx.stroke();
       }
       ctx.restore();
-    }
+    });
 
-    // Draw Crosshair
     if (gameState.isStarted && !gameState.isGameOver) {
       const mx = mousePosRef.current.x;
       const my = mousePosRef.current.y;
@@ -1740,7 +1659,6 @@ export default function App() {
       ctx.stroke();
     }
 
-    // Draw Flash
     if (gameState.flashTimer > 0) {
       ctx.fillStyle = `rgba(45, 212, 191, ${gameState.flashTimer * 0.05})`;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -1786,13 +1704,19 @@ export default function App() {
             <div className="flex items-center gap-1">
               <Zap
                 size={14}
-                className={`text-yellow-400 ${gameState.specialTimer > 0 ? "animate-pulse" : ""}`}
+                className={`text-yellow-400 ${
+                  gameState.specialTimer > 0 ? "animate-pulse" : ""
+                }`}
               />
               <span className="text-lg font-bold font-mono">
                 Lv.{gameState.weaponLevel}
                 {gameState.specialTimer > 0 && (
                   <span
-                    className={`${gameState.activeSpecial === "CURVED" ? "text-pink-500" : "text-orange-500"} ml-1 text-sm`}
+                    className={`${
+                      gameState.activeSpecial === "CURVED"
+                        ? "text-pink-500"
+                        : "text-orange-500"
+                    } ml-1 text-sm`}
                   >
                     ({gameState.activeSpecial})
                   </span>
@@ -1833,7 +1757,11 @@ export default function App() {
                     ? "Switch to Straight Fire"
                     : "Switch to Aimed Fire"
                 }
-                className={`flex items-center gap-1 px-2 py-0.5 rounded border ${gameState.shootMode === "STRAIGHT" ? "bg-blue-900/40 border-blue-500 text-blue-200" : "bg-zinc-800 border-zinc-700 text-zinc-300"} transition-all active:scale-95`}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded border ${
+                  gameState.shootMode === "STRAIGHT"
+                    ? "bg-blue-900/40 border-blue-500 text-blue-200"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-300"
+                } transition-all active:scale-95`}
               >
                 {gameState.shootMode === "STRAIGHT" ? (
                   <ArrowUp size={12} />
@@ -1857,7 +1785,11 @@ export default function App() {
                     ? "Disable Auto-Shoot"
                     : "Enable Auto-Shoot"
                 }
-                className={`flex items-center gap-1 px-2 py-0.5 rounded border ${gameState.isAutoShoot ? "bg-orange-900/40 border-orange-500 text-orange-200" : "bg-zinc-800 border-zinc-700 text-zinc-300"} transition-all active:scale-95`}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded border ${
+                  gameState.isAutoShoot
+                    ? "bg-orange-900/40 border-orange-500 text-orange-200"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-300"
+                } transition-all active:scale-95`}
               >
                 <Zap
                   size={12}
@@ -1873,14 +1805,16 @@ export default function App() {
       </div>
 
       {/* Game Canvas Container */}
-      <div className="relative group">
+      <div className="relative group w-full max-w-[450px]">
         <canvas
           ref={canvasRef}
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
           onMouseMove={handleMouseMove}
-          onTouchMove={handleMouseMove}
-          className="rounded-xl shadow-2xl border border-zinc-800 cursor-none touch-none"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          className="w-full h-auto rounded-xl shadow-2xl border border-zinc-800 cursor-none touch-none"
         />
 
         {/* HUD Overlay */}
@@ -1895,7 +1829,11 @@ export default function App() {
           {gameState.specialTimer > 0 && (
             <div className="w-full bg-zinc-900/80 h-1.5 rounded-full overflow-hidden border border-zinc-700">
               <motion.div
-                className={`h-full ${gameState.activeSpecial === "CURVED" ? "bg-pink-500" : "bg-orange-500"}`}
+                className={`h-full ${
+                  gameState.activeSpecial === "CURVED"
+                    ? "bg-pink-500"
+                    : "bg-orange-500"
+                }`}
                 initial={{ width: "100%" }}
                 animate={{
                   width: `${(gameState.specialTimer / (20 * 60)) * 100}%`,
@@ -1909,7 +1847,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Start / Game Over Overlays */}
+        {/* Overlays */}
         <AnimatePresence>
           {!gameState.isStarted && (
             <motion.div
@@ -1928,7 +1866,7 @@ export default function App() {
               </p>
               <button
                 type="button"
-                onClick={startGame}
+                onClick={handleStartGame}
                 className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-full font-bold flex items-center gap-2 transition-all active:scale-95"
               >
                 <Play size={20} fill="currentColor" />
@@ -1955,7 +1893,6 @@ export default function App() {
                   {gameState.score.toLocaleString()}
                 </span>
               </div>
-
               {!scoreSubmitted ? (
                 <div className="flex flex-col gap-2 mb-6 w-full max-w-[240px]">
                   <Input
@@ -2034,7 +1971,6 @@ export default function App() {
                   {gameState.score.toLocaleString()}
                 </span>
               </div>
-
               {!scoreSubmitted ? (
                 <div className="flex flex-col gap-2 mb-6 w-full max-w-[240px]">
                   <Input
@@ -2120,29 +2056,46 @@ export default function App() {
       </div>
 
       {/* Instructions */}
-      <div className="mt-8 grid grid-cols-2 gap-4 w-full max-w-[400px]">
-        <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-400 font-bold text-xs">
-            A/D
+      <div className="mt-8 w-full max-w-[400px] space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center gap-3">
+            <div className="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-400 font-bold text-[10px] shrink-0">
+              A/D
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase text-zinc-500 font-bold">
+                Move
+              </span>
+              <span className="text-xs">Keys or Arrow</span>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase text-zinc-500 font-bold">
-              Move
-            </span>
-            <span className="text-xs">Left / Right</span>
+          <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center gap-3">
+            <div className="w-8 h-8 rounded bg-yellow-500/20 flex items-center justify-center text-yellow-400 shrink-0">
+              <Zap size={16} />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase text-zinc-500 font-bold">
+                Shoot
+              </span>
+              <span className="text-xs">Space / Hold</span>
+            </div>
           </div>
         </div>
-        <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-yellow-500/20 flex items-center justify-center text-yellow-400">
-            <Zap size={16} />
+        {isMobileDevice() && (
+          <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-700/60 flex items-center gap-3">
+            <div className="w-8 h-8 rounded bg-purple-500/20 flex items-center justify-center text-purple-400 font-bold text-[10px] shrink-0">
+              2✦
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase text-zinc-500 font-bold">
+                Mobile Controls
+              </span>
+              <span className="text-xs text-zinc-400">
+                1st finger moves · 2nd finger aims
+              </span>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase text-zinc-500 font-bold">
-              Aim & Shoot
-            </span>
-            <span className="text-xs">Mouse + Space</span>
-          </div>
-        </div>
+        )}
       </div>
 
       <div className="mt-4 text-[10px] text-zinc-600 uppercase tracking-[0.2em] font-mono">
@@ -2175,10 +2128,26 @@ export default function App() {
                   <div
                     key={`${entry.name}-${i}`}
                     data-ocid={`leaderboard.item.${i + 1}`}
-                    className={`flex items-center gap-3 px-3 py-2 rounded ${i === 0 ? "bg-yellow-900/30 border border-yellow-700/40" : i === 1 ? "bg-zinc-800/60" : i === 2 ? "bg-zinc-800/40" : "bg-zinc-800/20"}`}
+                    className={`flex items-center gap-3 px-3 py-2 rounded ${
+                      i === 0
+                        ? "bg-yellow-900/30 border border-yellow-700/40"
+                        : i === 1
+                          ? "bg-zinc-800/60"
+                          : i === 2
+                            ? "bg-zinc-800/40"
+                            : "bg-zinc-800/20"
+                    }`}
                   >
                     <span
-                      className={`font-mono font-bold text-sm w-6 text-right ${i === 0 ? "text-yellow-400" : i === 1 ? "text-zinc-300" : i === 2 ? "text-orange-400" : "text-zinc-500"}`}
+                      className={`font-mono font-bold text-sm w-6 text-right ${
+                        i === 0
+                          ? "text-yellow-400"
+                          : i === 1
+                            ? "text-zinc-300"
+                            : i === 2
+                              ? "text-orange-400"
+                              : "text-zinc-500"
+                      }`}
                     >
                       #{i + 1}
                     </span>
