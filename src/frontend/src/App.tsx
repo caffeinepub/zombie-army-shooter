@@ -170,6 +170,7 @@ interface HerbPatch {
   size: number;
   rotation: number;
   id: number;
+  colors: string[];
 }
 interface MudPond {
   x: number;
@@ -458,6 +459,9 @@ const generateHerbPatches = (CW: number, CH: number): HerbPatch[] =>
     size: 6 + Math.random() * 12,
     rotation: Math.random() * Math.PI * 2,
     id: i,
+    colors: Array.from({ length: 4 }, () =>
+      Math.random() > 0.5 ? "#162b16" : "#1f401f",
+    ),
   }));
 
 const makeInitialState = (
@@ -1831,8 +1835,7 @@ export default function App() {
         const angle = (i / 4) * Math.PI * 2 + patch.rotation;
         const bx = Math.cos(angle) * patch.size * 0.3;
         const by = Math.sin(angle) * patch.size * 0.3;
-        const green = Math.random() > 0.5 ? "#1e3a1e" : "#2d5a2d";
-        ctx.fillStyle = green;
+        ctx.fillStyle = patch.colors[i];
         ctx.beginPath();
         ctx.ellipse(
           bx,
