@@ -26,6 +26,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2 } from "lucide-react";
 import { useGetTopScores, useSubmitScore } from "./hooks/useLeaderboard";
 
+// --- ID Counter ---
+let _nextId = 0;
+const nextId = () => ++_nextId;
+
 // --- Constants ---
 const CANVAS_WIDTH = 400;
 const CANVAS_HEIGHT = 600;
@@ -445,7 +449,7 @@ const generateMudPonds = (CW: number, CH: number, level = 1): MudPond[] => {
       radiusY,
       health: maxHealth,
       maxHealth,
-      id: Date.now() + Math.random() + i,
+      id: nextId(),
       attackers: [],
     });
   }
@@ -472,7 +476,7 @@ const makeInitialState = (
   playerY: LAND_H / 2,
   health: 100,
   armySize: 1,
-  weaponLevel: 1,
+  weaponLevel: 15,
   score: 0,
   level: 1,
   levelTimer: 60 * 60,
@@ -502,8 +506,8 @@ const makeInitialState = (
     id: i,
   })),
   frame: 0,
-  specialTimer: 0,
-  activeSpecial: "NONE",
+  specialTimer: 9999999,
+  activeSpecial: "EXPLOSIVE",
   bulletDamage: 1,
   isGameOver: false,
   isStarted,
@@ -925,7 +929,7 @@ export default function App() {
               ? UNIT_RADIUS * 4 * levelScale
               : UNIT_RADIUS * 2.5 * levelScale,
             type: isGiant ? "BOSS_GIANT" : "BOSS_RANGED",
-            id: Date.now() + Math.random(),
+            id: nextId(),
             shootTimer: isGiant ? undefined : 60,
           });
         } else {
@@ -974,7 +978,7 @@ export default function App() {
                 (1 + (newState.level - 1) * 0.12),
               radius: baseRadius * levelScale,
               type: isTank ? "TANK" : "NORMAL",
-              id: Date.now() + Math.random() + i,
+              id: nextId(),
             });
           }
         }
@@ -988,7 +992,7 @@ export default function App() {
         const isChoicePair = Math.random() > 0.5;
 
         if (isChoicePair) {
-          const pairId = Date.now();
+          const pairId = nextId();
           let positiveChance = 0.6;
           if (newState.armySize < 10) positiveChance = 0.85;
           if (newState.armySize > 35) positiveChance = 0.4;
@@ -1027,7 +1031,7 @@ export default function App() {
               type: leftIsPrimary ? typeA : typeB,
               value: leftIsPrimary ? finalValA : finalValB,
               width: gateWidth,
-              id: Date.now() + Math.random(),
+              id: nextId(),
               pairId,
             });
             newState.gates.push({
@@ -1036,7 +1040,7 @@ export default function App() {
               type: leftIsPrimary ? typeB : typeA,
               value: leftIsPrimary ? finalValB : finalValA,
               width: gateWidth,
-              id: Date.now() + Math.random(),
+              id: nextId(),
               pairId,
             });
           } else {
@@ -1046,7 +1050,7 @@ export default function App() {
               type: leftIsPrimary ? typeA : typeB,
               value: leftIsPrimary ? finalValA : finalValB,
               width: gateWidth,
-              id: Date.now() + Math.random(),
+              id: nextId(),
               pairId,
             });
             newState.gates.push({
@@ -1055,7 +1059,7 @@ export default function App() {
               type: leftIsPrimary ? typeB : typeA,
               value: leftIsPrimary ? finalValB : finalValA,
               width: gateWidth,
-              id: Date.now() + Math.random(),
+              id: nextId(),
               pairId,
             });
           }
@@ -1120,7 +1124,7 @@ export default function App() {
             type,
             value,
             width: 120,
-            id: Date.now() + Math.random(),
+            id: nextId(),
           });
         }
       }
@@ -1206,7 +1210,7 @@ export default function App() {
           vy: Math.sin(angle) * BULLET_SPEED,
           specialType: newState.activeSpecial,
           life: 0,
-          id: Date.now() + Math.random(),
+          id: nextId(),
           hitGateIds: [],
         });
       });
@@ -1231,7 +1235,7 @@ export default function App() {
             y: z.y,
             vx: (dx / dist) * speed,
             vy: (dy / dist) * speed,
-            id: Date.now() + Math.random(),
+            id: nextId(),
             health: 5,
             maxHealth: 5,
           });
@@ -1332,15 +1336,8 @@ export default function App() {
     newState.explosions = newState.explosions
       .map((e) => ({ ...e, radius: e.radius + 2 }))
       .filter((e) => e.radius < e.maxRadius);
-
-    // biome-ignore lint/complexity/noForEach: game loop performance
-    newState.explosions.forEach((e) => {
-      // biome-ignore lint/complexity/noForEach: game loop performance
-      newState.zombies.forEach((z) => {
-        const dist = Math.hypot(z.x - e.x, z.y - e.y);
-        if (dist < e.radius + 20) z.health -= 0.05;
-      });
-    });
+    if (newState.explosions.length > 30)
+      newState.explosions = newState.explosions.slice(-30);
 
     newState.floatingTexts = newState.floatingTexts
       .map((t) => ({ ...t, y: t.y - 1, life: t.life - 0.02 }))
@@ -1355,13 +1352,22 @@ export default function App() {
           hit = true;
           const damage =
             (1 + newState.weaponLevel * 0.5) * newState.bulletDamage;
+          const splashRadius = b.specialType === "EXPLOSIVE" ? 60 : 15;
           newState.explosions.push({
             x: b.x,
             y: b.y,
             radius: 2,
-            maxRadius: b.specialType === "EXPLOSIVE" ? 60 : 15,
-            id: Date.now() + Math.random(),
+            maxRadius: splashRadius,
+            id: nextId(),
           });
+          if (b.specialType === "EXPLOSIVE") {
+            for (const oz of newState.zombies) {
+              if (oz === z) continue;
+              const sd = Math.hypot(oz.x - b.x, oz.y - b.y);
+              if (sd < splashRadius)
+                oz.health -= damage * (1 - sd / splashRadius);
+            }
+          }
           return { ...z, health: z.health - damage };
         }
         return z;
@@ -1383,7 +1389,7 @@ export default function App() {
             y: b.y,
             radius: 2,
             maxRadius: b.specialType === "EXPLOSIVE" ? 60 : 15,
-            id: Date.now() + Math.random(),
+            id: nextId(),
           });
           return { ...zb, health: zb.health - damage };
         }
@@ -1460,7 +1466,7 @@ export default function App() {
                   y: pos.y,
                   angle,
                   life: 30,
-                  id: Date.now() + Math.random(),
+                  id: nextId(),
                 });
               }
               newState.armySize = Math.max(1, newState.armySize - 1);
@@ -1509,7 +1515,7 @@ export default function App() {
                 y: pos.y,
                 angle,
                 life: 30,
-                id: Date.now() + Math.random() + i,
+                id: nextId(),
               });
             }
           }
@@ -1580,7 +1586,7 @@ export default function App() {
               text: `+${bonus} PTS`,
               color: "#facc15",
               life: 1.0,
-              id: Date.now() + Math.random(),
+              id: nextId(),
             });
           }
           if (g.value < 0) {
@@ -1606,7 +1612,7 @@ export default function App() {
                     y: pos.y,
                     angle,
                     life: 30,
-                    id: Date.now() + Math.random() + i,
+                    id: nextId(),
                   });
                 }
               }
@@ -1635,7 +1641,7 @@ export default function App() {
               text: `+${bonus} PTS`,
               color: "#facc15",
               life: 1.0,
-              id: Date.now() + Math.random(),
+              id: nextId(),
             });
           }
           if (g.value > 1) {
@@ -1662,7 +1668,7 @@ export default function App() {
               text: `+${bonus} PTS`,
               color: "#facc15",
               life: 1.0,
-              id: Date.now() + Math.random(),
+              id: nextId(),
             });
           }
           if (g.value > 1) {
@@ -1688,7 +1694,7 @@ export default function App() {
                     y: pos.y,
                     angle,
                     life: 30,
-                    id: Date.now() + Math.random() + i,
+                    id: nextId(),
                   });
                 }
               }
@@ -1730,7 +1736,7 @@ export default function App() {
                   y: pos.y,
                   angle,
                   life: 30,
-                  id: Date.now() + Math.random() + i,
+                  id: nextId(),
                 });
               }
             }
@@ -2450,9 +2456,15 @@ export default function App() {
               />
             </div>
           )}
-          <div className="flex justify-between text-[10px] font-mono uppercase tracking-widest text-zinc-500">
+          <div className="flex justify-between items-start text-[10px] font-mono uppercase tracking-widest text-zinc-500">
             <span>Health: {Math.ceil(gameState.health)}%</span>
-            <span>Damage: x{gameState.bulletDamage.toFixed(1)}</span>
+            <div className="flex flex-col items-end">
+              <span>Damage: x{gameState.bulletDamage.toFixed(1)}</span>
+              <span>
+                Fire Rate: x
+                {(23 / Math.max(3, 25 - gameState.weaponLevel * 2)).toFixed(1)}
+              </span>
+            </div>
           </div>
         </div>
 
