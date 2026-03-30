@@ -1,0 +1,5 @@
+{
+  "name": "Zombie Horde Defender",
+  "description": "A lateral-scrolling shooter where you build an army and defend against waves of zombies using upgradable weapons and strategic gates.",
+  "requestFramePermissions": []
+}
