@@ -1806,6 +1806,7 @@ export default function App() {
       };
       setGameState({ ...newState });
     }
+    renderFrame();
     requestRef.current = requestAnimationFrame(update);
   };
 
@@ -1820,14 +1821,15 @@ export default function App() {
   }, [gameState.isStarted, gameState.isGameOver]);
 
   // --- Rendering ---
-  useEffect(() => {
+  const renderFrame = () => {
+    const gs = gameStateRef.current;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const CW = isLandscape ? LAND_W : CANVAS_WIDTH;
-    const CH = isLandscape ? LAND_H : CANVAS_HEIGHT;
+    const CW = isLandscapeRef.current ? LAND_W : CANVAS_WIDTH;
+    const CH = isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT;
 
     // --- Offscreen background cache ---
     if (
@@ -1861,7 +1863,7 @@ export default function App() {
       }
 
       // biome-ignore lint/complexity/noForEach: game loop performance
-      gameState.backgroundElements.forEach((el) => {
+      gs.backgroundElements.forEach((el) => {
         bgCtx.save();
         bgCtx.translate(el.x, el.y);
         bgCtx.rotate(el.rotation);
@@ -1894,7 +1896,7 @@ export default function App() {
 
       // Draw herb patches
       // biome-ignore lint/complexity/noForEach: game loop performance
-      gameState.herbPatches.forEach((patch) => {
+      gs.herbPatches.forEach((patch) => {
         bgCtx.save();
         bgCtx.translate(patch.x, patch.y);
         bgCtx.globalAlpha = 0.55;
@@ -1926,7 +1928,7 @@ export default function App() {
 
     // Draw mud ponds
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.mudPonds.forEach((pond) => {
+    gs.mudPonds.forEach((pond) => {
       const { x, y, radiusX, radiusY, health, maxHealth, attackers, id } = pond;
       const pct = health / maxHealth;
       ctx.save();
@@ -2025,18 +2027,18 @@ export default function App() {
       ctx.restore();
     });
 
-    const zombieSway = Math.sin(gameState.frame * 0.1) * 0.1;
+    const zombieSway = Math.sin(gs.frame * 0.1) * 0.1;
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.zombies.forEach((z) => {
+    gs.zombies.forEach((z) => {
       drawZombie(
         ctx,
         z.x,
         z.y,
         z.type,
         z.radius,
-        gameState.frame,
+        gs.frame,
         z.attackAnimTimer,
-        isLandscape,
+        isLandscapeRef.current,
         zombieSway,
       );
       const size = z.radius;
@@ -2059,7 +2061,7 @@ export default function App() {
     });
 
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.gates.forEach((g) => {
+    gs.gates.forEach((g) => {
       ctx.save();
       ctx.translate(g.x, g.y);
       let color = "#71717a";
@@ -2100,7 +2102,7 @@ export default function App() {
         ctx.shadowColor = color;
       }
 
-      if (isLandscape) {
+      if (isLandscapeRef.current) {
         ctx.fillStyle = `${color}44`;
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
@@ -2148,23 +2150,22 @@ export default function App() {
       ctx.restore();
     });
 
-    const renderPlayerX = gameState.smoothPlayerX ?? gameState.playerX;
-    const renderPlayerY =
-      gameState.smoothPlayerY ?? gameState.playerY ?? LAND_H / 2;
+    const renderPlayerX = gs.smoothPlayerX ?? gs.playerX;
+    const renderPlayerY = gs.smoothPlayerY ?? gs.playerY ?? LAND_H / 2;
     const armyPositions = getArmyPositions(
       renderPlayerX,
-      gameState.armySize,
-      isLandscape,
+      gs.armySize,
+      isLandscapeRef.current,
       renderPlayerY,
     );
     const targetX = mousePosRef.current.x;
     const targetY = mousePosRef.current.y;
     const flashMap = new Map<number, number>();
-    for (const f of gameState.spawnFlashes ?? []) flashMap.set(f.index, f.life);
+    for (const f of gs.spawnFlashes ?? []) flashMap.set(f.index, f.life);
     armyPositions.forEach((pos, index) => {
       let angle: number;
-      if (gameState.shootMode === "STRAIGHT") {
-        angle = isLandscape ? 0 : -Math.PI / 2;
+      if (gs.shootMode === "STRAIGHT") {
+        angle = isLandscapeRef.current ? 0 : -Math.PI / 2;
       } else {
         angle = Math.atan2(targetY - pos.y, targetX - pos.x);
       }
@@ -2175,22 +2176,22 @@ export default function App() {
         pos.y,
         angle,
         index === 0,
-        gameState.weaponLevel,
-        gameState.hitFlashTimer,
+        gs.weaponLevel,
+        gs.hitFlashTimer,
         spawnFlashLife ?? 0,
       );
     });
 
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.dyingSoldiers.forEach((s) => {
+    gs.dyingSoldiers.forEach((s) => {
       ctx.save();
       ctx.globalAlpha = s.life / 30;
-      drawSoldier(ctx, s.x, s.y, s.angle, false, gameState.weaponLevel, 10);
+      drawSoldier(ctx, s.x, s.y, s.angle, false, gs.weaponLevel, 10);
       ctx.restore();
     });
 
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.floatingTexts.forEach((t) => {
+    gs.floatingTexts.forEach((t) => {
       ctx.save();
       ctx.globalAlpha = t.life;
       ctx.fillStyle = t.color;
@@ -2203,7 +2204,7 @@ export default function App() {
     });
 
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.zombieBullets.forEach((b) => {
+    gs.zombieBullets.forEach((b) => {
       ctx.save();
       ctx.translate(b.x, b.y);
       ctx.shadowBlur = 15;
@@ -2235,7 +2236,7 @@ export default function App() {
 
     ctx.save();
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.explosions.forEach((e) => {
+    gs.explosions.forEach((e) => {
       const alpha = 1 - e.radius / e.maxRadius;
       ctx.beginPath();
       ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
@@ -2248,7 +2249,7 @@ export default function App() {
     ctx.restore();
 
     // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.bullets.forEach((b) => {
+    gs.bullets.forEach((b) => {
       ctx.save();
       ctx.fillStyle =
         b.specialType === "CURVED"
@@ -2267,7 +2268,7 @@ export default function App() {
       ctx.restore();
     });
 
-    if (gameState.isStarted && !gameState.isGameOver) {
+    if (gs.isStarted && !gs.isGameOver) {
       const mx = mousePosRef.current.x;
       const my = mousePosRef.current.y;
       ctx.strokeStyle = "#facc15";
@@ -2285,17 +2286,17 @@ export default function App() {
       ctx.stroke();
     }
 
-    if (gameState.flashTimer > 0) {
-      ctx.fillStyle = `rgba(45, 212, 191, ${gameState.flashTimer * 0.05})`;
+    if (gs.flashTimer > 0) {
+      ctx.fillStyle = `rgba(45, 212, 191, ${gs.flashTimer * 0.05})`;
       ctx.fillRect(0, 0, CW, CH);
     }
 
     // Pause overlay
     if (
-      isPaused &&
-      gameState.isStarted &&
-      !gameState.isGameOver &&
-      !gameState.isVictory
+      isPausedRef.current &&
+      gs.isStarted &&
+      !gs.isGameOver &&
+      !gs.isVictory
     ) {
       ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
       ctx.fillRect(0, 0, CW, CH);
@@ -2311,7 +2312,13 @@ export default function App() {
       ctx.fillStyle = "rgba(200,200,200,0.9)";
       ctx.fillText("Click or tap to continue", CW / 2, CH / 2 + 40);
     }
-  }, [gameState, isLandscape, isPaused]);
+  };
+
+  // Trigger render on pause/orientation changes (game loop handles per-frame)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: render ref pattern
+  useEffect(() => {
+    renderFrame();
+  }, [isLandscape, isPaused]);
 
   const isMobile = isMobileDevice();
 
