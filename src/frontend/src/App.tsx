@@ -46,6 +46,39 @@ const SPAWN_RATE_GATE = 300;
 const MAX_ARMY_SIZE = 75;
 const PLAYER_SPEED = 4;
 
+function buildZombieGrid(
+  zombies: Zombie[],
+  cellSize: number,
+): Map<string, Zombie[]> {
+  const grid = new Map<string, Zombie[]>();
+  for (const z of zombies) {
+    const cx = Math.floor(z.x / cellSize);
+    const cy = Math.floor(z.y / cellSize);
+    const key = `${cx},${cy}`;
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key)!.push(z);
+  }
+  return grid;
+}
+
+function getNearbyZombies(
+  grid: Map<string, Zombie[]>,
+  x: number,
+  y: number,
+  cellSize: number,
+): Zombie[] {
+  const cx = Math.floor(x / cellSize);
+  const cy = Math.floor(y / cellSize);
+  const result: Zombie[] = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const neighbors = grid.get(`${cx + dx},${cy + dy}`);
+      if (neighbors) for (const n of neighbors) result.push(n);
+    }
+  }
+  return result;
+}
+
 const getArmyPositions = (
   playerX: number,
   armySize: number,
@@ -329,6 +362,7 @@ const drawZombie = (
   frame: number,
   attackAnimTimer = 0,
   isLandscape = false,
+  swayOverride?: number,
 ) => {
   ctx.save();
 
@@ -340,7 +374,8 @@ const drawZombie = (
     ctx.translate(x, y + lunge);
   }
 
-  const sway = Math.sin(frame * 0.1) * 0.1;
+  const sway =
+    swayOverride !== undefined ? swayOverride : Math.sin(frame * 0.1) * 0.1;
   ctx.rotate(sway);
 
   ctx.fillStyle = "rgba(0,0,0,0.3)";
@@ -541,7 +576,21 @@ export default function App() {
   const submitScoreMutation = useSubmitScore();
 
   const requestRef = useRef<number>(null);
+  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bgDirtyRef = useRef(true);
   const gameStateRef = useRef<GameState>(gameState);
+  const uiSnapshotRef = useRef({
+    score: 0,
+    health: 100,
+    armySize: 1,
+    weaponLevel: 0,
+    bulletDamage: 1.0,
+    activeSpecial: "NONE" as string,
+    isGameOver: false,
+    isVictory: false,
+    isLevelTransition: false,
+    isStarted: false,
+  });
   const isLandscapeRef = useRef(isLandscape);
   const isPausedRef = useRef(isPaused);
   const isSpacePressed = useRef(false);
@@ -651,10 +700,12 @@ export default function App() {
     setScoreSubmitted(false);
     setPlayerName("");
     setIsPaused(false);
+    bgDirtyRef.current = true;
     setGameState(makeInitialState(true, isLandscapeRef.current));
   };
 
   const startNextLevel = () => {
+    bgDirtyRef.current = true;
     setGameState((prev) => ({
       ...prev,
       level: prev.level + 1,
@@ -841,8 +892,8 @@ export default function App() {
   };
 
   const update = () => {
-    const state = gameStateRef.current;
-    if (!state.isStarted || state.isGameOver) return;
+    const gs = gameStateRef.current;
+    if (!gs.isStarted || gs.isGameOver) return;
 
     if (isPausedRef.current) {
       requestRef.current = requestAnimationFrame(update);
@@ -853,7 +904,8 @@ export default function App() {
     const CW = landscape ? LAND_W : CANVAS_WIDTH;
     const CH = landscape ? LAND_H : CANVAS_HEIGHT;
 
-    const newState = { ...state };
+    // Work directly on gameStateRef.current (no shallow copy)
+    const newState = gs;
     const currentGateSpeed = GATE_SPEED * (1 + (newState.level - 1) * 0.15);
     const currentZombieSpeedBase =
       ZOMBIE_SPEED_BASE * (1 + (newState.level - 1) * 0.1);
@@ -862,13 +914,11 @@ export default function App() {
     if (newState.flashTimer > 0) newState.flashTimer--;
     if (newState.hitFlashTimer > 0) newState.hitFlashTimer--;
 
-    newState.dyingSoldiers = newState.dyingSoldiers
-      .map((s) => ({ ...s, life: s.life - 1 }))
-      .filter((s) => s.life > 0);
+    for (const s of newState.dyingSoldiers) s.life--;
+    newState.dyingSoldiers = newState.dyingSoldiers.filter((s) => s.life > 0);
 
-    newState.spawnFlashes = newState.spawnFlashes
-      .map((f) => ({ ...f, life: f.life - 1 }))
-      .filter((f) => f.life > 0);
+    for (const f of newState.spawnFlashes) f.life--;
+    newState.spawnFlashes = newState.spawnFlashes.filter((f) => f.life > 0);
 
     if (newState.specialTimer > 0) {
       newState.specialTimer--;
@@ -1174,6 +1224,14 @@ export default function App() {
     const curSmoothX = newState.smoothPlayerX ?? newState.playerX;
     const curSmoothY = newState.smoothPlayerY ?? newState.playerY ?? LAND_H / 2;
 
+    // Cache army positions once per frame (expensive trig)
+    const cachedArmyPositions = getArmyPositions(
+      curSmoothX,
+      newState.armySize,
+      landscape,
+      curSmoothY,
+    );
+
     // --- Shooting Logic ---
     const shootInterval = Math.max(3, 25 - newState.weaponLevel * 2);
     if (
@@ -1182,12 +1240,7 @@ export default function App() {
         newState.isAutoShoot) &&
       newState.frame % shootInterval === 0
     ) {
-      const positions = getArmyPositions(
-        curSmoothX,
-        newState.armySize,
-        landscape,
-        curSmoothY,
-      );
+      const positions = cachedArmyPositions;
       const mouseX = mousePosRef.current.x;
       const mouseY = mousePosRef.current.y;
 
@@ -1243,110 +1296,112 @@ export default function App() {
       }
     });
 
-    newState.bullets = newState.bullets
-      .map((b) => {
-        let nx = b.x + b.vx;
-        let ny = b.y + b.vy;
-        if (b.specialType === "CURVED") {
-          const speed = Math.hypot(b.vx, b.vy);
-          const perpX = -b.vy / speed;
-          const perpY = b.vx / speed;
-          const curveAmount = Math.sin(b.life * 0.2) * 4;
-          nx += perpX * curveAmount;
-          ny += perpY * curveAmount;
-        }
-        return { ...b, x: nx, y: ny, life: b.life + 1 };
-      })
-      .filter((b) => b.y > -20 && b.y < CH + 20 && b.x > -20 && b.x < CW + 20);
+    for (const b of newState.bullets) {
+      let nx = b.x + b.vx;
+      let ny = b.y + b.vy;
+      if (b.specialType === "CURVED") {
+        const speed = Math.hypot(b.vx, b.vy);
+        const perpX = -b.vy / speed;
+        const perpY = b.vx / speed;
+        const curveAmount = Math.sin(b.life * 0.2) * 4;
+        nx += perpX * curveAmount;
+        ny += perpY * curveAmount;
+      }
+      b.x = nx;
+      b.y = ny;
+      b.life++;
+    }
+    newState.bullets = newState.bullets.filter(
+      (b) => b.y > -20 && b.y < CH + 20 && b.x > -20 && b.x < CW + 20,
+    );
 
     // --- Mud Pond Logic: reset attackers ---
-    newState.mudPonds = newState.mudPonds.map((p) => ({ ...p, attackers: [] }));
+    for (const p of newState.mudPonds) p.attackers.length = 0;
 
-    newState.zombies = newState.zombies
-      .map((z) => {
-        // Check ponds for slow/stop
-        let effectiveSpeed = z.speed;
-        let stoppedByPond = false;
+    for (const z of newState.zombies) {
+      let effectiveSpeed = z.speed;
+      let stoppedByPond = false;
 
-        for (const pond of newState.mudPonds) {
-          if (pond.health <= 0) continue;
-          const dx = z.x - pond.x;
-          const dy = z.y - pond.y;
-          // Normalized ellipse distance (1.0 = at edge of visual pond)
-          const normDist = Math.sqrt(
-            (dx / pond.radiusX) ** 2 + (dy / pond.radiusY) ** 2,
-          );
-          const innerNorm = 1.0; // stop at pond edge
-          const outerNorm = 2.2; // slow zone outer edge
-
-          if (normDist <= innerNorm) {
-            // Inside pond visual -- stop and eat
-            stoppedByPond = true;
-            pond.attackers.push({ x: z.x, y: z.y });
-            pond.health -= 0.4 / Math.max(1, pond.attackers.length * 0.5);
-            break;
-          }
-          if (normDist <= outerNorm) {
-            const factor = (normDist - innerNorm) / (outerNorm - innerNorm);
-            effectiveSpeed = z.speed * (0.15 + factor * 0.85);
-          }
+      for (const pond of newState.mudPonds) {
+        if (pond.health <= 0) continue;
+        const dx = z.x - pond.x;
+        const dy = z.y - pond.y;
+        const normDist = Math.sqrt(
+          (dx / pond.radiusX) ** 2 + (dy / pond.radiusY) ** 2,
+        );
+        const innerNorm = 1.0;
+        const outerNorm = 2.2;
+        if (normDist <= innerNorm) {
+          stoppedByPond = true;
+          pond.attackers.push({ x: z.x, y: z.y });
+          pond.health -= 0.4 / Math.max(1, pond.attackers.length * 0.5);
+          break;
         }
-
-        if (stoppedByPond) {
-          return {
-            ...z,
-            attackAnimTimer: 10,
-          };
+        if (normDist <= outerNorm) {
+          const factor = (normDist - innerNorm) / (outerNorm - innerNorm);
+          effectiveSpeed = z.speed * (0.15 + factor * 0.85);
         }
+      }
 
-        return {
-          ...z,
-          x: landscape ? z.x - effectiveSpeed : z.x,
-          y: landscape ? z.y : z.y + effectiveSpeed,
-          attackAnimTimer:
-            (z.attackAnimTimer || 0) > 0 ? z.attackAnimTimer! - 1 : 0,
-        };
-      })
-      .filter((z) => {
-        const escaped = landscape ? z.x <= 0 : z.y >= CANVAS_HEIGHT;
-        if (escaped) {
-          newState.health -= 5;
-          return false;
-        }
-        return true;
-      });
+      if (stoppedByPond) {
+        z.attackAnimTimer = 10;
+      } else {
+        if (landscape) z.x -= effectiveSpeed;
+        else z.y += effectiveSpeed;
+        z.attackAnimTimer =
+          (z.attackAnimTimer || 0) > 0 ? z.attackAnimTimer! - 1 : 0;
+      }
+    }
+    newState.zombies = newState.zombies.filter((z) => {
+      const escaped = landscape ? z.x <= 0 : z.y >= CANVAS_HEIGHT;
+      if (escaped) {
+        newState.health -= 5;
+        return false;
+      }
+      return true;
+    });
 
     // Remove destroyed ponds
     newState.mudPonds = newState.mudPonds.filter((p) => p.health > 0);
 
-    newState.zombieBullets = newState.zombieBullets
-      .map((b) => ({ ...b, x: b.x + b.vx, y: b.y + b.vy }))
-      .filter((b) => b.y < CH + 50 && b.y > -50 && b.x > -50 && b.x < CW + 50);
+    for (const b of newState.zombieBullets) {
+      b.x += b.vx;
+      b.y += b.vy;
+    }
+    newState.zombieBullets = newState.zombieBullets.filter(
+      (b) => b.y < CH + 50 && b.y > -50 && b.x > -50 && b.x < CW + 50,
+    );
 
-    newState.gates = newState.gates
-      .map((g) => ({
-        ...g,
-        x: landscape ? g.x - currentGateSpeed : g.x,
-        y: landscape ? g.y : g.y + currentGateSpeed,
-        bulletHitFlash:
-          g.bulletHitFlash && g.bulletHitFlash > 0 ? g.bulletHitFlash - 1 : 0,
-      }))
-      .filter((g) => (landscape ? g.x > -100 : g.y < CANVAS_HEIGHT + 100));
+    for (const g of newState.gates) {
+      if (landscape) g.x -= currentGateSpeed;
+      else g.y += currentGateSpeed;
+      if (g.bulletHitFlash && g.bulletHitFlash > 0) g.bulletHitFlash--;
+      else g.bulletHitFlash = 0;
+    }
+    newState.gates = newState.gates.filter((g) =>
+      landscape ? g.x > -100 : g.y < CANVAS_HEIGHT + 100,
+    );
 
-    newState.explosions = newState.explosions
-      .map((e) => ({ ...e, radius: e.radius + 2 }))
-      .filter((e) => e.radius < e.maxRadius);
+    for (const e of newState.explosions) e.radius += 2;
+    newState.explosions = newState.explosions.filter(
+      (e) => e.radius < e.maxRadius,
+    );
     if (newState.explosions.length > 30)
       newState.explosions = newState.explosions.slice(-30);
 
-    newState.floatingTexts = newState.floatingTexts
-      .map((t) => ({ ...t, y: t.y - 1, life: t.life - 0.02 }))
-      .filter((t) => t.life > 0);
+    for (const t of newState.floatingTexts) {
+      t.y -= 1;
+      t.life -= 0.02;
+    }
+    newState.floatingTexts = newState.floatingTexts.filter((t) => t.life > 0);
 
     // Bullets vs Zombies
+    const zombieGrid = buildZombieGrid(newState.zombies, 80);
     newState.bullets = newState.bullets.filter((b) => {
       let hit = false;
-      newState.zombies = newState.zombies.map((z) => {
+      const nearbyZombies = getNearbyZombies(zombieGrid, b.x, b.y, 80);
+      for (const z of newState.zombies) {
+        if (!nearbyZombies.includes(z)) continue;
         const dist = Math.hypot(b.x - z.x, b.y - z.y);
         if (dist < z.radius + 5 && !hit) {
           hit = true;
@@ -1368,17 +1423,16 @@ export default function App() {
                 oz.health -= damage * (1 - sd / splashRadius);
             }
           }
-          return { ...z, health: z.health - damage };
+          z.health -= damage;
         }
-        return z;
-      });
+      }
       return !hit;
     });
 
     // Bullets vs Zombie Bullets
     newState.bullets = newState.bullets.filter((b) => {
       let hit = false;
-      newState.zombieBullets = newState.zombieBullets.map((zb) => {
+      for (const zb of newState.zombieBullets) {
         const dist = Math.hypot(b.x - zb.x, b.y - zb.y);
         if (dist < 15 && !hit) {
           hit = true;
@@ -1391,10 +1445,9 @@ export default function App() {
             maxRadius: b.specialType === "EXPLOSIVE" ? 60 : 15,
             id: nextId(),
           });
-          return { ...zb, health: zb.health - damage };
+          zb.health -= damage;
         }
-        return zb;
-      });
+      }
       return !hit;
     });
 
@@ -1449,12 +1502,7 @@ export default function App() {
           if (g.type === "TRAP") {
             const penaltyTaken = g.trapPenaltyTaken || 0;
             if (penaltyTaken < 10) {
-              const currentPositions = getArmyPositions(
-                curSmoothX,
-                newState.armySize,
-                landscape,
-                curSmoothY,
-              );
+              const currentPositions = cachedArmyPositions;
               const pos = currentPositions[currentPositions.length - 1];
               if (pos) {
                 const angle = Math.atan2(
@@ -1493,16 +1541,11 @@ export default function App() {
     const applyDamage = (amount: number) => {
       newState.hitFlashTimer = 10;
       if (newState.armySize > 1) {
-        const currentPositions = getArmyPositions(
-          curSmoothX,
-          newState.armySize,
-          landscape,
-          curSmoothY,
-        );
         const newSize = Math.max(1, newState.armySize - amount);
         const removedCount =
           Math.floor(newState.armySize) - Math.floor(newSize);
         if (removedCount > 0) {
+          const currentPositions = cachedArmyPositions;
           for (let i = 0; i < removedCount; i++) {
             const pos = currentPositions[currentPositions.length - 1 - i];
             if (pos) {
@@ -1526,14 +1569,9 @@ export default function App() {
       }
     };
 
-    const armyPositions = getArmyPositions(
-      newState.playerX,
-      newState.armySize,
-      landscape,
-      newState.playerY ?? LAND_H / 2,
-    );
+    const armyPositions = cachedArmyPositions;
 
-    newState.zombies = newState.zombies.map((z) => {
+    for (const z of newState.zombies) {
       const hitUnit = armyPositions.some(
         (pos) => Math.hypot(pos.x - z.x, pos.y - z.y) < z.radius + UNIT_RADIUS,
       );
@@ -1543,10 +1581,9 @@ export default function App() {
         if (z.type === "BOSS_GIANT") damage = 2.0;
         if (z.type === "BOSS_RANGED") damage = 1.0;
         applyDamage(damage);
-        return { ...z, attackAnimTimer: 10 };
+        z.attackAnimTimer = 10;
       }
-      return z;
-    });
+    }
 
     newState.zombieBullets = newState.zombieBullets.filter((b) => {
       const hitUnit = armyPositions.some(
@@ -1590,12 +1627,7 @@ export default function App() {
             });
           }
           if (g.value < 0) {
-            const currentPositions = getArmyPositions(
-              curSmoothX,
-              newState.armySize,
-              landscape,
-              curSmoothY,
-            );
+            const currentPositions = cachedArmyPositions;
             const newSize = Math.max(1, newState.armySize + g.value);
             const removedCount =
               Math.floor(newState.armySize) - Math.floor(newSize);
@@ -1672,12 +1704,7 @@ export default function App() {
             });
           }
           if (g.value > 1) {
-            const currentPositions = getArmyPositions(
-              curSmoothX,
-              newState.armySize,
-              landscape,
-              curSmoothY,
-            );
+            const currentPositions = cachedArmyPositions;
             const newSize = Math.max(1, newState.armySize / g.value);
             const removedCount =
               Math.floor(newState.armySize) - Math.floor(newSize);
@@ -1711,12 +1738,7 @@ export default function App() {
           newState.weaponLevel++;
           newState.specialTimer = 20 * 60;
         } else if (g.type === "TRAP") {
-          const currentPositions = getArmyPositions(
-            curSmoothX,
-            newState.armySize,
-            landscape,
-            curSmoothY,
-          );
+          const currentPositions = cachedArmyPositions;
           const newSize = Math.max(
             1,
             newState.armySize - Math.floor(newState.armySize * 0.5),
@@ -1756,7 +1778,34 @@ export default function App() {
 
     if (newState.health <= 0) newState.isGameOver = true;
 
-    setGameState(newState);
+    // Only re-render React when UI-visible fields actually change
+    const snap = uiSnapshotRef.current;
+    if (
+      snap.score !== newState.score ||
+      snap.health !== newState.health ||
+      snap.armySize !== newState.armySize ||
+      snap.weaponLevel !== newState.weaponLevel ||
+      snap.bulletDamage !== newState.bulletDamage ||
+      snap.activeSpecial !== newState.activeSpecial ||
+      snap.isGameOver !== newState.isGameOver ||
+      snap.isVictory !== newState.isVictory ||
+      snap.isLevelTransition !== newState.isLevelTransition ||
+      snap.isStarted !== newState.isStarted
+    ) {
+      uiSnapshotRef.current = {
+        score: newState.score,
+        health: newState.health,
+        armySize: newState.armySize,
+        weaponLevel: newState.weaponLevel,
+        bulletDamage: newState.bulletDamage,
+        activeSpecial: newState.activeSpecial,
+        isGameOver: newState.isGameOver,
+        isVictory: newState.isVictory,
+        isLevelTransition: newState.isLevelTransition,
+        isStarted: newState.isStarted,
+      };
+      setGameState({ ...newState });
+    }
     requestRef.current = requestAnimationFrame(update);
   };
 
@@ -1780,82 +1829,100 @@ export default function App() {
     const CW = isLandscape ? LAND_W : CANVAS_WIDTH;
     const CH = isLandscape ? LAND_H : CANVAS_HEIGHT;
 
+    // --- Offscreen background cache ---
+    if (
+      bgDirtyRef.current ||
+      !bgCanvasRef.current ||
+      bgCanvasRef.current.width !== CW ||
+      bgCanvasRef.current.height !== CH
+    ) {
+      const bgCanvas = document.createElement("canvas");
+      bgCanvas.width = CW;
+      bgCanvas.height = CH;
+      bgCanvasRef.current = bgCanvas;
+      const bgCtx = bgCanvas.getContext("2d")!;
+
+      bgCtx.fillStyle = "#111";
+      bgCtx.fillRect(0, 0, CW, CH);
+
+      bgCtx.strokeStyle = "#222";
+      bgCtx.lineWidth = 1;
+      for (let x = 0; x <= CW; x += 40) {
+        bgCtx.beginPath();
+        bgCtx.moveTo(x, 0);
+        bgCtx.lineTo(x, CH);
+        bgCtx.stroke();
+      }
+      for (let y = 0; y <= CH; y += 40) {
+        bgCtx.beginPath();
+        bgCtx.moveTo(0, y);
+        bgCtx.lineTo(CW, y);
+        bgCtx.stroke();
+      }
+
+      // biome-ignore lint/complexity/noForEach: game loop performance
+      gameState.backgroundElements.forEach((el) => {
+        bgCtx.save();
+        bgCtx.translate(el.x, el.y);
+        bgCtx.rotate(el.rotation);
+        bgCtx.globalAlpha = 0.3;
+        if (el.type === "RUBBLE") {
+          bgCtx.fillStyle = "#444";
+          bgCtx.beginPath();
+          bgCtx.moveTo(-el.size / 2, -el.size / 2);
+          bgCtx.lineTo(el.size / 2, -el.size / 3);
+          bgCtx.lineTo(el.size / 3, el.size / 2);
+          bgCtx.lineTo(-el.size / 3, el.size / 3);
+          bgCtx.closePath();
+          bgCtx.fill();
+        } else if (el.type === "CRACK") {
+          bgCtx.strokeStyle = "#333";
+          bgCtx.lineWidth = 2;
+          bgCtx.beginPath();
+          bgCtx.moveTo(-el.size / 2, 0);
+          bgCtx.lineTo(0, el.size / 4);
+          bgCtx.lineTo(el.size / 2, -el.size / 4);
+          bgCtx.stroke();
+        } else if (el.type === "WALL") {
+          bgCtx.fillStyle = "#222";
+          bgCtx.fillRect(-el.size / 2, -el.size / 4, el.size, el.size / 2);
+          bgCtx.strokeStyle = "#333";
+          bgCtx.strokeRect(-el.size / 2, -el.size / 4, el.size, el.size / 2);
+        }
+        bgCtx.restore();
+      });
+
+      // Draw herb patches
+      // biome-ignore lint/complexity/noForEach: game loop performance
+      gameState.herbPatches.forEach((patch) => {
+        bgCtx.save();
+        bgCtx.translate(patch.x, patch.y);
+        bgCtx.globalAlpha = 0.55;
+        for (let i = 0; i < 4; i++) {
+          const angle = (i / 4) * Math.PI * 2 + patch.rotation;
+          const bx = Math.cos(angle) * patch.size * 0.3;
+          const by = Math.sin(angle) * patch.size * 0.3;
+          bgCtx.fillStyle = patch.colors[i];
+          bgCtx.beginPath();
+          bgCtx.ellipse(
+            bx,
+            by,
+            patch.size * 0.15,
+            patch.size * 0.42,
+            angle,
+            0,
+            Math.PI * 2,
+          );
+          bgCtx.fill();
+        }
+        bgCtx.restore();
+      });
+
+      bgDirtyRef.current = false;
+    }
+
     ctx.clearRect(0, 0, CW, CH);
-    ctx.fillStyle = "#111";
-    ctx.fillRect(0, 0, CW, CH);
-
-    ctx.strokeStyle = "#222";
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= CW; x += 40) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, CH);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= CH; y += 40) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(CW, y);
-      ctx.stroke();
-    }
-
-    // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.backgroundElements.forEach((el) => {
-      ctx.save();
-      ctx.translate(el.x, el.y);
-      ctx.rotate(el.rotation);
-      ctx.globalAlpha = 0.3;
-      if (el.type === "RUBBLE") {
-        ctx.fillStyle = "#444";
-        ctx.beginPath();
-        ctx.moveTo(-el.size / 2, -el.size / 2);
-        ctx.lineTo(el.size / 2, -el.size / 3);
-        ctx.lineTo(el.size / 3, el.size / 2);
-        ctx.lineTo(-el.size / 3, el.size / 3);
-        ctx.closePath();
-        ctx.fill();
-      } else if (el.type === "CRACK") {
-        ctx.strokeStyle = "#333";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(-el.size / 2, 0);
-        ctx.lineTo(0, el.size / 4);
-        ctx.lineTo(el.size / 2, -el.size / 4);
-        ctx.stroke();
-      } else if (el.type === "WALL") {
-        ctx.fillStyle = "#222";
-        ctx.fillRect(-el.size / 2, -el.size / 4, el.size, el.size / 2);
-        ctx.strokeStyle = "#333";
-        ctx.strokeRect(-el.size / 2, -el.size / 4, el.size, el.size / 2);
-      }
-      ctx.restore();
-    });
-
-    // Draw herb patches
-    // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.herbPatches.forEach((patch) => {
-      ctx.save();
-      ctx.translate(patch.x, patch.y);
-      ctx.globalAlpha = 0.55;
-      for (let i = 0; i < 4; i++) {
-        const angle = (i / 4) * Math.PI * 2 + patch.rotation;
-        const bx = Math.cos(angle) * patch.size * 0.3;
-        const by = Math.sin(angle) * patch.size * 0.3;
-        ctx.fillStyle = patch.colors[i];
-        ctx.beginPath();
-        ctx.ellipse(
-          bx,
-          by,
-          patch.size * 0.15,
-          patch.size * 0.42,
-          angle,
-          0,
-          Math.PI * 2,
-        );
-        ctx.fill();
-      }
-      ctx.restore();
-    });
+    ctx.drawImage(bgCanvasRef.current, 0, 0);
 
     // Draw mud ponds
     // biome-ignore lint/complexity/noForEach: game loop performance
@@ -1958,6 +2025,7 @@ export default function App() {
       ctx.restore();
     });
 
+    const zombieSway = Math.sin(gameState.frame * 0.1) * 0.1;
     // biome-ignore lint/complexity/noForEach: game loop performance
     gameState.zombies.forEach((z) => {
       drawZombie(
@@ -1969,6 +2037,7 @@ export default function App() {
         gameState.frame,
         z.attackAnimTimer,
         isLandscape,
+        zombieSway,
       );
       const size = z.radius;
       ctx.save();
@@ -2090,6 +2159,8 @@ export default function App() {
     );
     const targetX = mousePosRef.current.x;
     const targetY = mousePosRef.current.y;
+    const flashMap = new Map<number, number>();
+    for (const f of gameState.spawnFlashes ?? []) flashMap.set(f.index, f.life);
     armyPositions.forEach((pos, index) => {
       let angle: number;
       if (gameState.shootMode === "STRAIGHT") {
@@ -2097,7 +2168,7 @@ export default function App() {
       } else {
         angle = Math.atan2(targetY - pos.y, targetX - pos.x);
       }
-      const spawnFlash = gameState.spawnFlashes?.find((f) => f.index === index);
+      const spawnFlashLife = flashMap.get(index);
       drawSoldier(
         ctx,
         pos.x,
@@ -2106,7 +2177,7 @@ export default function App() {
         index === 0,
         gameState.weaponLevel,
         gameState.hitFlashTimer,
-        spawnFlash?.life || 0,
+        spawnFlashLife ?? 0,
       );
     });
 
