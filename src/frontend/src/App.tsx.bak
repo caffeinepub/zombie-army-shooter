@@ -164,24 +164,6 @@ interface BackgroundElement {
   id: number;
 }
 
-interface HerbPatch {
-  x: number;
-  y: number;
-  size: number;
-  rotation: number;
-  id: number;
-}
-interface MudPond {
-  x: number;
-  y: number;
-  radiusX: number;
-  radiusY: number;
-  health: number;
-  maxHealth: number;
-  id: number;
-  attackers: { x: number; y: number }[];
-}
-
 interface GameState {
   playerX: number;
   playerY: number;
@@ -203,8 +185,6 @@ interface GameState {
   dyingSoldiers: DyingSoldier[];
   spawnFlashes: SpawnFlash[];
   backgroundElements: BackgroundElement[];
-  mudPonds: MudPond[];
-  herbPatches: HerbPatch[];
   frame: number;
   specialTimer: number;
   activeSpecial: "NONE" | "CURVED" | "EXPLOSIVE";
@@ -429,37 +409,6 @@ const isMobileDevice = () =>
   (/Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent) ||
     navigator.maxTouchPoints > 1);
 
-const generateMudPonds = (CW: number, CH: number, level = 1): MudPond[] => {
-  const count = 2 + Math.floor(Math.random() * 4); // 2-5
-  const ponds: MudPond[] = [];
-  for (let i = 0; i < count; i++) {
-    const radiusX = 30 + Math.random() * 25;
-    const radiusY = 18 + Math.random() * 18;
-    const margin = 80;
-    const maxHealth = (60 + level * 20) * (0.8 + Math.random() * 0.4);
-    ponds.push({
-      x: margin + Math.random() * (CW - margin * 2),
-      y: margin + Math.random() * (CH - margin * 2),
-      radiusX,
-      radiusY,
-      health: maxHealth,
-      maxHealth,
-      id: Date.now() + Math.random() + i,
-      attackers: [],
-    });
-  }
-  return ponds;
-};
-
-const generateHerbPatches = (CW: number, CH: number): HerbPatch[] =>
-  Array.from({ length: 20 + Math.floor(Math.random() * 6) }, (_, i) => ({
-    x: Math.random() * CW,
-    y: Math.random() * CH,
-    size: 6 + Math.random() * 12,
-    rotation: Math.random() * Math.PI * 2,
-    id: i,
-  }));
-
 const makeInitialState = (
   isStarted: boolean,
   landscape = false,
@@ -481,14 +430,6 @@ const makeInitialState = (
   floatingTexts: [],
   dyingSoldiers: [],
   spawnFlashes: [],
-  mudPonds: generateMudPonds(
-    landscape ? LAND_W : CANVAS_WIDTH,
-    landscape ? LAND_H : CANVAS_HEIGHT,
-  ),
-  herbPatches: generateHerbPatches(
-    landscape ? LAND_W : CANVAS_WIDTH,
-    landscape ? LAND_H : CANVAS_HEIGHT,
-  ),
   backgroundElements: Array.from({ length: 20 }, (_, i) => ({
     x: Math.random() * (landscape ? LAND_W : CANVAS_WIDTH),
     y: Math.random() * (landscape ? LAND_H : CANVAS_HEIGHT),
@@ -546,14 +487,6 @@ export default function App() {
   const moveTargetXRef = useRef(CANVAS_WIDTH / 2);
   const moveTargetYRef = useRef(LAND_H / 2);
   const touchActiveRef = useRef(false);
-  const prevTouch0Ref = useRef<{ x: number; y: number } | null>(null);
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const touchMovedRef = useRef(false);
-  const prevMouseRef = useRef<{ x: number; y: number } | null>(null);
-  const mouseStartRef = useRef<{ x: number; y: number } | null>(null);
-  const mouseMovedRef = useRef(false);
-  const mouseButtonDownRef = useRef(false);
-  const TOUCH_DEAD_ZONE = 6;
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -660,15 +593,6 @@ export default function App() {
       floatingTexts: [],
       dyingSoldiers: [],
       spawnFlashes: [],
-      mudPonds: generateMudPonds(
-        isLandscapeRef.current ? LAND_W : CANVAS_WIDTH,
-        isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT,
-        prev.level + 1,
-      ),
-      herbPatches: generateHerbPatches(
-        isLandscapeRef.current ? LAND_W : CANVAS_WIDTH,
-        isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT,
-      ),
       hitFlashTimer: 0,
     }));
   };
@@ -697,55 +621,39 @@ export default function App() {
   const handleMouseMove = (e: React.MouseEvent) => {
     const pos = getCanvasPos(e.clientX, e.clientY);
     mousePosRef.current = pos;
-    if (
-      mouseButtonDownRef.current &&
-      prevMouseRef.current &&
-      mouseStartRef.current
-    ) {
-      if (!mouseMovedRef.current) {
-        const dist = Math.sqrt(
-          (pos.x - mouseStartRef.current.x) ** 2 +
-            (pos.y - mouseStartRef.current.y) ** 2,
+    if (isLandscapeRef.current) {
+      moveTargetYRef.current = Math.max(
+        UNIT_RADIUS,
+        Math.min(LAND_H - UNIT_RADIUS, pos.y),
+      );
+    } else {
+      moveTargetXRef.current = Math.max(
+        UNIT_RADIUS,
+        Math.min(CANVAS_WIDTH - UNIT_RADIUS, pos.x),
+      );
+    }
+  };
+
+  const updateTouches = (touches: React.TouchList) => {
+    touchActiveRef.current = touches.length > 0;
+    if (touches.length >= 1) {
+      const pos = getCanvasPos(touches[0].clientX, touches[0].clientY);
+      if (isLandscapeRef.current) {
+        moveTargetYRef.current = Math.max(
+          UNIT_RADIUS,
+          Math.min(LAND_H - UNIT_RADIUS, pos.y),
         );
-        if (dist > TOUCH_DEAD_ZONE) mouseMovedRef.current = true;
-      }
-      if (mouseMovedRef.current) {
-        const dx = pos.x - prevMouseRef.current.x;
-        const dy = pos.y - prevMouseRef.current.y;
-        const state = gameStateRef.current;
-        if (isLandscapeRef.current) {
-          const curY = state.playerY ?? LAND_H / 2;
-          moveTargetYRef.current = Math.max(
-            UNIT_RADIUS,
-            Math.min(LAND_H - UNIT_RADIUS, curY + dy),
-          );
-        } else {
-          moveTargetXRef.current = Math.max(
-            UNIT_RADIUS,
-            Math.min(CANVAS_WIDTH - UNIT_RADIUS, state.playerX + dx),
-          );
-        }
+      } else {
+        moveTargetXRef.current = Math.max(
+          UNIT_RADIUS,
+          Math.min(CANVAS_WIDTH - UNIT_RADIUS, pos.x),
+        );
       }
     }
-    prevMouseRef.current = pos;
-  };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const pos = getCanvasPos(e.clientX, e.clientY);
-    mouseButtonDownRef.current = true;
-    mouseStartRef.current = pos;
-    prevMouseRef.current = pos;
-    mouseMovedRef.current = false;
-    if (isPausedRef.current) {
-      setIsPaused(false);
+    if (touches.length >= 2) {
+      const pos = getCanvasPos(touches[1].clientX, touches[1].clientY);
+      mousePosRef.current = pos;
     }
-  };
-
-  const handleMouseUp = () => {
-    mouseButtonDownRef.current = false;
-    prevMouseRef.current = null;
-    mouseStartRef.current = null;
-    mouseMovedRef.current = false;
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -754,74 +662,29 @@ export default function App() {
       setIsPaused(false);
       return;
     }
-    touchActiveRef.current = true;
-    if (e.touches.length >= 1) {
-      const pos = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY);
-      prevTouch0Ref.current = pos;
-      touchStartRef.current = pos;
-      touchMovedRef.current = false;
-    }
-    if (e.touches.length >= 2) {
-      const pos = getCanvasPos(e.touches[1].clientX, e.touches[1].clientY);
-      mousePosRef.current = pos;
-    }
+    updateTouches(e.touches);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
     e.preventDefault();
-    touchActiveRef.current = e.touches.length > 0;
-    if (e.touches.length >= 1) {
-      const pos = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY);
-      const prev = prevTouch0Ref.current;
-      const start = touchStartRef.current;
-      if (prev && start) {
-        if (!touchMovedRef.current) {
-          const dist = Math.sqrt(
-            (pos.x - start.x) ** 2 + (pos.y - start.y) ** 2,
-          );
-          if (dist > TOUCH_DEAD_ZONE) touchMovedRef.current = true;
-        }
-        if (touchMovedRef.current) {
-          const dx = pos.x - prev.x;
-          const dy = pos.y - prev.y;
-          const state = gameStateRef.current;
-          if (isLandscapeRef.current) {
-            const curY = state.playerY ?? LAND_H / 2;
-            moveTargetYRef.current = Math.max(
-              UNIT_RADIUS,
-              Math.min(LAND_H - UNIT_RADIUS, curY + dy),
-            );
-          } else {
-            moveTargetXRef.current = Math.max(
-              UNIT_RADIUS,
-              Math.min(CANVAS_WIDTH - UNIT_RADIUS, state.playerX + dx),
-            );
-          }
-        }
-      }
-      prevTouch0Ref.current = pos;
-    }
-    if (e.touches.length >= 2) {
-      const pos = getCanvasPos(e.touches[1].clientX, e.touches[1].clientY);
-      mousePosRef.current = pos;
-    }
+    updateTouches(e.touches);
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
     e.preventDefault();
     touchActiveRef.current = e.touches.length > 0;
-    if (e.touches.length === 0) {
-      prevTouch0Ref.current = null;
-      touchStartRef.current = null;
-      touchMovedRef.current = false;
-    } else {
+    if (e.touches.length >= 1) {
       const pos = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY);
-      prevTouch0Ref.current = pos;
-      touchStartRef.current = pos;
-      touchMovedRef.current = false;
-      if (e.touches.length >= 2) {
-        const pos2 = getCanvasPos(e.touches[1].clientX, e.touches[1].clientY);
-        mousePosRef.current = pos2;
+      if (isLandscapeRef.current) {
+        moveTargetYRef.current = Math.max(
+          UNIT_RADIUS,
+          Math.min(LAND_H - UNIT_RADIUS, pos.y),
+        );
+      } else {
+        moveTargetXRef.current = Math.max(
+          UNIT_RADIUS,
+          Math.min(CANVAS_WIDTH - UNIT_RADIUS, pos.x),
+        );
       }
     }
   };
@@ -1251,54 +1114,14 @@ export default function App() {
       })
       .filter((b) => b.y > -20 && b.y < CH + 20 && b.x > -20 && b.x < CW + 20);
 
-    // --- Mud Pond Logic: reset attackers ---
-    newState.mudPonds = newState.mudPonds.map((p) => ({ ...p, attackers: [] }));
-
     newState.zombies = newState.zombies
-      .map((z) => {
-        // Check ponds for slow/stop
-        let effectiveSpeed = z.speed;
-        let stoppedByPond = false;
-
-        for (const pond of newState.mudPonds) {
-          if (pond.health <= 0) continue;
-          const dx = z.x - pond.x;
-          const dy = z.y - pond.y;
-          // Normalized ellipse distance (1.0 = at edge of visual pond)
-          const normDist = Math.sqrt(
-            (dx / pond.radiusX) ** 2 + (dy / pond.radiusY) ** 2,
-          );
-          const innerNorm = 1.0; // stop at pond edge
-          const outerNorm = 2.2; // slow zone outer edge
-
-          if (normDist <= innerNorm) {
-            // Inside pond visual -- stop and eat
-            stoppedByPond = true;
-            pond.attackers.push({ x: z.x, y: z.y });
-            pond.health -= 0.4 / Math.max(1, pond.attackers.length * 0.5);
-            break;
-          }
-          if (normDist <= outerNorm) {
-            const factor = (normDist - innerNorm) / (outerNorm - innerNorm);
-            effectiveSpeed = z.speed * (0.15 + factor * 0.85);
-          }
-        }
-
-        if (stoppedByPond) {
-          return {
-            ...z,
-            attackAnimTimer: 10,
-          };
-        }
-
-        return {
-          ...z,
-          x: landscape ? z.x - effectiveSpeed : z.x,
-          y: landscape ? z.y : z.y + effectiveSpeed,
-          attackAnimTimer:
-            (z.attackAnimTimer || 0) > 0 ? z.attackAnimTimer! - 1 : 0,
-        };
-      })
+      .map((z) => ({
+        ...z,
+        x: landscape ? z.x - z.speed : z.x,
+        y: landscape ? z.y : z.y + z.speed,
+        attackAnimTimer:
+          (z.attackAnimTimer || 0) > 0 ? z.attackAnimTimer! - 1 : 0,
+      }))
       .filter((z) => {
         const escaped = landscape ? z.x <= 0 : z.y >= CANVAS_HEIGHT;
         if (escaped) {
@@ -1307,9 +1130,6 @@ export default function App() {
         }
         return true;
       });
-
-    // Remove destroyed ponds
-    newState.mudPonds = newState.mudPonds.filter((p) => p.health > 0);
 
     newState.zombieBullets = newState.zombieBullets
       .map((b) => ({ ...b, x: b.x + b.vx, y: b.y + b.vy }))
@@ -1555,13 +1375,10 @@ export default function App() {
       const hitGate = landscape
         ? armyPositions.some(
             (pos) =>
-              Math.abs(pos.x - g.x) < 28 &&
-              Math.abs(pos.y - g.y) < g.width / 2 + 8,
+              Math.abs(pos.x - g.x) < 20 && Math.abs(pos.y - g.y) < g.width / 2,
           )
         : armyPositions.some(
-            (pos) =>
-              Math.abs(pos.x - g.x) < g.width / 2 + 8 &&
-              Math.abs(pos.y - g.y) < 28,
+            (pos) => Math.hypot(pos.x - g.x, pos.y - g.y) < 40,
           );
 
       if (hitGate) {
@@ -1821,134 +1638,6 @@ export default function App() {
       ctx.restore();
     });
 
-    // Draw herb patches
-    // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.herbPatches.forEach((patch) => {
-      ctx.save();
-      ctx.translate(patch.x, patch.y);
-      ctx.globalAlpha = 0.55;
-      for (let i = 0; i < 4; i++) {
-        const angle = (i / 4) * Math.PI * 2 + patch.rotation;
-        const bx = Math.cos(angle) * patch.size * 0.3;
-        const by = Math.sin(angle) * patch.size * 0.3;
-        const green = Math.random() > 0.5 ? "#1e3a1e" : "#2d5a2d";
-        ctx.fillStyle = green;
-        ctx.beginPath();
-        ctx.ellipse(
-          bx,
-          by,
-          patch.size * 0.15,
-          patch.size * 0.42,
-          angle,
-          0,
-          Math.PI * 2,
-        );
-        ctx.fill();
-      }
-      ctx.restore();
-    });
-
-    // Draw mud ponds
-    // biome-ignore lint/complexity/noForEach: game loop performance
-    gameState.mudPonds.forEach((pond) => {
-      const { x, y, radiusX, radiusY, health, maxHealth, attackers, id } = pond;
-      const pct = health / maxHealth;
-      ctx.save();
-      ctx.translate(x, y);
-
-      // Stage-based scale: pond shrinks as it dries out
-      const scale = 0.4 + pct * 0.6;
-      const rX = radiusX * scale;
-      const rY = radiusY * scale;
-
-      // Shadow / depth
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = "rgba(0,0,0,0.6)";
-
-      // Base mud fill
-      let baseColor: string;
-      let rimColor: string;
-      if (pct > 0.75) {
-        baseColor = "#3d2a0a";
-        rimColor = "#5a3d12";
-      } else if (pct > 0.5) {
-        baseColor = "#4a3210";
-        rimColor = "#6b4c1a";
-      } else if (pct > 0.25) {
-        baseColor = "#5c4520";
-        rimColor = "#7a5e30";
-      } else {
-        baseColor = "#6b5535";
-        rimColor = "#8a7050";
-      }
-
-      // Main oval
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rX, rY, 0, 0, Math.PI * 2);
-      ctx.fillStyle = baseColor;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Rim highlight
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rX, rY, 0, 0, Math.PI * 2);
-      ctx.strokeStyle = rimColor;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Wet sheen when fresh
-      if (pct > 0.5) {
-        ctx.beginPath();
-        ctx.ellipse(
-          -rX * 0.25,
-          -rY * 0.25,
-          rX * 0.35,
-          rY * 0.25,
-          -0.3,
-          0,
-          Math.PI * 2,
-        );
-        ctx.fillStyle = "rgba(120,80,20,0.25)";
-        ctx.fill();
-      }
-
-      // Bubble/texture dots
-      const seed = id * 137;
-      for (let i = 0; i < Math.floor(3 + pct * 5); i++) {
-        const bx = Math.cos((seed + i * 61) % (Math.PI * 2)) * rX * 0.6;
-        const by = Math.sin((seed + i * 37) % (Math.PI * 2)) * rY * 0.6;
-        ctx.beginPath();
-        ctx.arc(bx, by, 2 + (i % 3), 0, Math.PI * 2);
-        ctx.fillStyle = rimColor;
-        ctx.fill();
-      }
-
-      // Churned/bite marks where zombies are eating
-      // biome-ignore lint/complexity/noForEach: game loop performance
-      attackers.forEach((a) => {
-        const ax = a.x - x;
-        const ay = a.y - y;
-        ctx.beginPath();
-        ctx.arc(ax * 0.6, ay * 0.6, 6, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(180,120,40,0.7)";
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(ax * 0.5, ay * 0.5, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(220,160,60,0.5)";
-        ctx.fill();
-      });
-
-      // Health bar above pond
-      const barW = rX * 2;
-      ctx.fillStyle = "rgba(0,0,0,0.5)";
-      ctx.fillRect(-barW / 2, -rY - 10, barW, 4);
-      ctx.fillStyle =
-        pct > 0.5 ? "#78350f" : pct > 0.25 ? "#b45309" : "#d97706";
-      ctx.fillRect(-barW / 2, -rY - 10, barW * pct, 4);
-
-      ctx.restore();
-    });
-
     // biome-ignore lint/complexity/noForEach: game loop performance
     gameState.zombies.forEach((z) => {
       drawZombie(
@@ -2038,6 +1727,7 @@ export default function App() {
           ctx.strokeRect(-21, -g.width / 2 - 1, 42, g.width + 2);
           ctx.restore();
         }
+        ctx.rotate(Math.PI / 2);
         ctx.shadowBlur = 0;
         ctx.fillStyle = "#fff";
         ctx.font = "bold 13px Inter, sans-serif";
@@ -2061,6 +1751,7 @@ export default function App() {
           ctx.restore();
         }
         ctx.shadowBlur = 0;
+        ctx.rotate(Math.PI / 2);
         ctx.fillStyle = "#fff";
         ctx.font = "bold 13px Inter, sans-serif";
         ctx.textAlign = "center";
@@ -2411,8 +2102,6 @@ export default function App() {
           width={isLandscape ? LAND_W : CANVAS_WIDTH}
           height={isLandscape ? LAND_H : CANVAS_HEIGHT}
           onMouseMove={handleMouseMove}
-          onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUp}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
