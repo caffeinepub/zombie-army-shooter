@@ -39,6 +39,7 @@ const LAND_H = 400;
 const PLAYER_LAND_X = 80;
 const UNIT_RADIUS = 8;
 const BULLET_SPEED = 7;
+const MAX_BULLETS = 1000;
 const ZOMBIE_SPEED_BASE = 1.0;
 const GATE_SPEED = 1.5;
 const SPAWN_RATE_ZOMBIE = 60;
@@ -1232,6 +1233,18 @@ export default function App() {
       curSmoothY,
     );
 
+    // Viewport culling: only process soldiers within (or near) the canvas
+    const CW_cull = landscape ? LAND_W : CANVAS_WIDTH;
+    const CH_cull = landscape ? LAND_H : CANVAS_HEIGHT;
+    const CULL_MARGIN = 40;
+    const visibleArmyPositions = cachedArmyPositions.filter(
+      (p) =>
+        p.x > -CULL_MARGIN &&
+        p.x < CW_cull + CULL_MARGIN &&
+        p.y > -CULL_MARGIN &&
+        p.y < CH_cull + CULL_MARGIN,
+    );
+
     // --- Shooting Logic ---
     const shootInterval = Math.max(3, 25 - newState.weaponLevel * 2);
     if (
@@ -1240,7 +1253,7 @@ export default function App() {
         newState.isAutoShoot) &&
       newState.frame % shootInterval === 0
     ) {
-      const positions = cachedArmyPositions;
+      const positions = visibleArmyPositions;
       const mouseX = mousePosRef.current.x;
       const mouseY = mousePosRef.current.y;
 
@@ -1267,6 +1280,13 @@ export default function App() {
           hitGateIds: [],
         });
       });
+    }
+
+    // Bullet cap: remove oldest bullets when over limit
+    if (newState.bullets.length > MAX_BULLETS) {
+      newState.bullets = newState.bullets.slice(
+        newState.bullets.length - MAX_BULLETS,
+      );
     }
 
     // --- Update Entities ---
@@ -1569,7 +1589,7 @@ export default function App() {
       }
     };
 
-    const armyPositions = cachedArmyPositions;
+    const armyPositions = visibleArmyPositions;
 
     for (const z of newState.zombies) {
       const hitUnit = armyPositions.some(
@@ -2152,11 +2172,21 @@ export default function App() {
 
     const renderPlayerX = gs.smoothPlayerX ?? gs.playerX;
     const renderPlayerY = gs.smoothPlayerY ?? gs.playerY ?? LAND_H / 2;
-    const armyPositions = getArmyPositions(
+    const allArmyPositions = getArmyPositions(
       renderPlayerX,
       gs.armySize,
       isLandscapeRef.current,
       renderPlayerY,
+    );
+    const renderCW = isLandscapeRef.current ? LAND_W : CANVAS_WIDTH;
+    const renderCH = isLandscapeRef.current ? LAND_H : CANVAS_HEIGHT;
+    const RENDER_MARGIN = 40;
+    const armyPositions = allArmyPositions.filter(
+      (p) =>
+        p.x > -RENDER_MARGIN &&
+        p.x < renderCW + RENDER_MARGIN &&
+        p.y > -RENDER_MARGIN &&
+        p.y < renderCH + RENDER_MARGIN,
     );
     const targetX = mousePosRef.current.x;
     const targetY = mousePosRef.current.y;
@@ -2319,6 +2349,12 @@ export default function App() {
   useEffect(() => {
     renderFrame();
   }, [isLandscape, isPaused]);
+
+  // Initial render so canvas is not white before game starts
+  // biome-ignore lint/correctness/useExhaustiveDependencies: initial render
+  useEffect(() => {
+    setTimeout(() => renderFrame(), 0);
+  }, []);
 
   const isMobile = isMobileDevice();
 
