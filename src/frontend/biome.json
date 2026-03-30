@@ -26,15 +26,11 @@
         "noUnusedVariables": "error"
       },
       "suspicious": {
-        "noExplicitAny": "off",
-        "noArrayIndexKey": "off"
+        "noExplicitAny": "off"
       },
       "style": {
         "useConst": "off",
         "noNonNullAssertion": "off"
-      },
-      "complexity": {
-        "noForEach": "off"
       }
     }
   },

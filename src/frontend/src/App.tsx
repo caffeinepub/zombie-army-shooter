@@ -897,7 +897,7 @@ export default function App() {
       const mouseX = mousePosRef.current.x;
       const mouseY = mousePosRef.current.y;
 
-      positions.forEach((pos) => {
+      for (const pos of positions) {
         let baseAngle: number;
 
         if (newState.shootMode === "STRAIGHT") {
@@ -927,12 +927,12 @@ export default function App() {
           id: Date.now() + Math.random(),
           hitGateIds: [],
         });
-      });
+      }
     }
 
     // --- Update Entities ---
     // Boss Shooting Logic
-    newState.zombies.forEach((z) => {
+    for (const z of newState.zombies) {
       if (z.type === "BOSS_RANGED" && z.shootTimer !== undefined) {
         z.shootTimer--;
         if (z.shootTimer <= 0) {
@@ -952,7 +952,7 @@ export default function App() {
           });
         }
       }
-    });
+    }
 
     newState.bullets = newState.bullets
       .map((b) => {
@@ -1019,14 +1019,14 @@ export default function App() {
       }))
       .filter((e) => e.radius < e.maxRadius);
 
-    newState.explosions.forEach((e) => {
-      newState.zombies.forEach((z) => {
+    for (const e of newState.explosions) {
+      for (const z of newState.zombies) {
         const dist = Math.hypot(z.x - e.x, z.y - e.y);
         if (dist < e.radius + 20) {
           z.health -= 0.05; // Continuous damage while in explosion
         }
-      });
-    });
+      }
+    }
 
     // Update Floating Texts
     newState.floatingTexts = newState.floatingTexts
@@ -1504,7 +1504,7 @@ export default function App() {
     // --- Entity Rendering ---
 
     // Draw Zombies
-    gameState.zombies.forEach((z) => {
+    for (const z of gameState.zombies) {
       drawZombie(
         ctx,
         z.x,
@@ -1535,10 +1535,10 @@ export default function App() {
       ctx.fillRect(-size, -size - 15, size * 2 * (z.health / z.maxHealth), 4);
 
       ctx.restore();
-    });
+    }
 
     // Draw Gates (Moved after zombies for visibility)
-    gameState.gates.forEach((g) => {
+    for (const g of gameState.gates) {
       ctx.save();
       ctx.translate(g.x, g.y);
 
@@ -1595,7 +1595,7 @@ export default function App() {
       ctx.fillText(label, 0, 0);
 
       ctx.restore();
-    });
+    }
 
     // Draw Player & Army
     const armyPositions = getArmyPositions(
@@ -1605,7 +1605,7 @@ export default function App() {
     const targetX = mousePosRef.current.x;
     const targetY = mousePosRef.current.y;
 
-    armyPositions.forEach((pos, index) => {
+    for (const [index, pos] of armyPositions.entries()) {
       let angle: number;
       if (gameState.shootMode === "STRAIGHT") {
         angle = -Math.PI / 2; // Face straight up
@@ -1625,18 +1625,18 @@ export default function App() {
         gameState.hitFlashTimer,
         spawnFlash?.life || 0,
       );
-    });
+    }
 
     // Draw Dying Soldiers
-    gameState.dyingSoldiers.forEach((s) => {
+    for (const s of gameState.dyingSoldiers) {
       ctx.save();
       ctx.globalAlpha = s.life / 30;
       drawSoldier(ctx, s.x, s.y, s.angle, false, gameState.weaponLevel, 10); // Pass hitFlashTimer=10 to force red color
       ctx.restore();
-    });
+    }
 
     // Draw Floating Texts
-    gameState.floatingTexts.forEach((t) => {
+    for (const t of gameState.floatingTexts) {
       ctx.save();
       ctx.globalAlpha = t.life;
       ctx.fillStyle = t.color;
@@ -1646,10 +1646,10 @@ export default function App() {
       ctx.shadowColor = "rgba(0,0,0,0.5)";
       ctx.fillText(t.text, t.x, t.y);
       ctx.restore();
-    });
+    }
 
     // Draw Zombie Bullets
-    gameState.zombieBullets.forEach((b) => {
+    for (const b of gameState.zombieBullets) {
       ctx.save();
       ctx.translate(b.x, b.y);
 
@@ -1684,11 +1684,11 @@ export default function App() {
       ctx.fillRect(-barWidth / 2, -15, barWidth * healthPercent, barHeight);
 
       ctx.restore();
-    });
+    }
 
     // Draw Explosions
     ctx.save();
-    gameState.explosions.forEach((e) => {
+    for (const e of gameState.explosions) {
       const alpha = 1 - e.radius / e.maxRadius;
       ctx.beginPath();
       ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
@@ -1697,11 +1697,11 @@ export default function App() {
       ctx.strokeStyle = `rgba(255, 200, 0, ${alpha})`;
       ctx.lineWidth = 2;
       ctx.stroke();
-    });
+    }
     ctx.restore();
 
     // Draw Bullets
-    gameState.bullets.forEach((b) => {
+    for (const b of gameState.bullets) {
       ctx.save();
       ctx.fillStyle =
         b.specialType === "CURVED"
@@ -1719,7 +1719,7 @@ export default function App() {
         ctx.stroke();
       }
       ctx.restore();
-    });
+    }
 
     // Draw Crosshair
     if (gameState.isStarted && !gameState.isGameOver) {
@@ -1801,6 +1801,21 @@ export default function App() {
             </div>
           </div>
           <div className="flex flex-col items-end">
+            <button
+              type="button"
+              data-ocid="leaderboard.open_modal_button"
+              onClick={() => {
+                setShowLeaderboard(true);
+                refetchScores();
+              }}
+              title="View Leaderboard"
+              className="flex items-center gap-1 px-2 py-0.5 rounded border bg-yellow-900/30 border-yellow-600/50 text-yellow-400 hover:bg-yellow-900/60 transition-all active:scale-95 mb-1"
+            >
+              <Trophy size={12} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">
+                Board
+              </span>
+            </button>
             <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
               Mode
             </span>
@@ -1853,23 +1868,6 @@ export default function App() {
                 </span>
               </button>
             </div>
-          </div>
-          <div className="flex flex-col items-end justify-end">
-            <button
-              type="button"
-              data-ocid="leaderboard.open_modal_button"
-              onClick={() => {
-                setShowLeaderboard(true);
-                refetchScores();
-              }}
-              title="View Leaderboard"
-              className="flex items-center gap-1 px-2 py-0.5 rounded border bg-yellow-900/30 border-yellow-600/50 text-yellow-400 hover:bg-yellow-900/60 transition-all active:scale-95"
-            >
-              <Trophy size={12} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">
-                Board
-              </span>
-            </button>
           </div>
         </div>
       </div>
